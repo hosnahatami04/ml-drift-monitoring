@@ -22,3 +22,14 @@ splits:
   validation: 0.1
   reference: 0.1
   stream_pool: 0.3
+
+stream:
+  n_windows: 60
+  drift_start: 20
+  detection_horizon: 20
+
+seeds:
+  calibration_start: 0
+  calibration_count: 20
+  evaluation_start: 100
+  evaluation_count: 30

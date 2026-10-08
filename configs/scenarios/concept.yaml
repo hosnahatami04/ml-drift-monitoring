@@ -1,0 +1,14 @@
+name: concept
+kind: concept
+subgroup:
+  - feature: hours-per-week
+    min: 45
+  - feature: education-num
+    min: 13
+severity:
+  low:
+    p: 0.15
+  medium:
+    p: 0.3
+  high:
+    p: 0.5

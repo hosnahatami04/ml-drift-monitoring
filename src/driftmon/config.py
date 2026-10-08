@@ -54,6 +54,42 @@ class SplitFractions(BaseModel):
         return self
 
 
+class StreamConfig(BaseModel):
+    n_windows: int = 60
+    drift_start: int = 20
+    detection_horizon: int = 20
+
+    @model_validator(mode="after")
+    def _drift_starts_inside_stream(self) -> "StreamConfig":
+        if not 0 < self.drift_start < self.n_windows:
+            raise ValueError(
+                f"drift_start must lie inside the stream, got {self.drift_start} "
+                f"of {self.n_windows} windows"
+            )
+        return self
+
+
+class SeedsConfig(BaseModel):
+    calibration_start: int = 0
+    calibration_count: int = 20
+    evaluation_start: int = 100
+    evaluation_count: int = 30
+
+    @property
+    def calibration(self) -> list[int]:
+        return list(range(self.calibration_start, self.calibration_start + self.calibration_count))
+
+    @property
+    def evaluation(self) -> list[int]:
+        return list(range(self.evaluation_start, self.evaluation_start + self.evaluation_count))
+
+    @model_validator(mode="after")
+    def _seed_ranges_disjoint(self) -> "SeedsConfig":
+        if set(self.calibration) & set(self.evaluation):
+            raise ValueError("calibration and evaluation seed ranges must not overlap")
+        return self
+
+
 class EffectGates(BaseModel):
     ks_d: float = 0.05
     psi: float = 0.1
@@ -107,6 +143,9 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     dataset: DatasetConfig = DatasetConfig()
     splits: SplitFractions = SplitFractions()
+    stream: StreamConfig = StreamConfig()
+    seeds: SeedsConfig = SeedsConfig()
+    scenarios_dir: Path = Path("configs") / "scenarios"
 
     @property
     def raw_data_dir(self) -> Path:
