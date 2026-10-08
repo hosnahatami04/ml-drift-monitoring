@@ -1,10 +1,10 @@
 """Application settings loaded from YAML with environment overrides."""
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml
-from pydantic import BaseModel, ValidationError, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 from pydantic_settings import (
     BaseSettings,
     PydanticBaseSettingsSource,
@@ -12,6 +12,8 @@ from pydantic_settings import (
 )
 
 DEFAULT_CONFIG_PATH = Path("configs") / "default.yaml"
+
+DEFAULT_THRESHOLDS_PATH = Path("configs") / "thresholds.yaml"
 
 ENV_PREFIX = "DRIFTMON_"
 
@@ -50,6 +52,45 @@ class SplitFractions(BaseModel):
         if abs(total - 1.0) > 1e-9:
             raise ValueError(f"split fractions must sum to 1, got {total}")
         return self
+
+
+class EffectGates(BaseModel):
+    ks_d: float = 0.05
+    psi: float = 0.1
+    cramers_v: float = 0.05
+
+
+class PageHinkleySettings(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    delta: float = 0.005
+    lambda_: float = Field(default=0.05, alias="lambda")
+
+
+class ThresholdsConfig(BaseModel):
+    """Detection thresholds; initial values until calibration freezes them."""
+
+    alpha: float = 0.01
+    correction: Literal["bonferroni", "benjamini-hochberg"] = "bonferroni"
+    k_features: int = 1
+    min_effect: EffectGates = EffectGates()
+    page_hinkley: PageHinkleySettings = PageHinkleySettings()
+
+
+def load_thresholds(path: Path | None = None) -> ThresholdsConfig:
+    resolved = path if path is not None else DEFAULT_THRESHOLDS_PATH
+    if not resolved.is_file():
+        raise ConfigError(f"thresholds file not found: {resolved}")
+    try:
+        raw: Any = yaml.safe_load(resolved.read_text(encoding="utf-8"))
+    except yaml.YAMLError as exc:
+        raise ConfigError(f"thresholds file is not valid YAML: {resolved}: {exc}") from exc
+    if not isinstance(raw, dict):
+        raise ConfigError(f"thresholds file must contain a mapping: {resolved}")
+    try:
+        return ThresholdsConfig(**raw)
+    except ValidationError as exc:
+        raise ConfigError(f"invalid thresholds in {resolved}: {exc}") from exc
 
 
 class Settings(BaseSettings):
