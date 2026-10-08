@@ -1,0 +1,11 @@
+# Initial values; calibrated and frozen in the evaluation phase.
+alpha: 0.01
+correction: bonferroni
+k_features: 1
+min_effect:
+  ks_d: 0.05
+  psi: 0.1
+  cramers_v: 0.05
+page_hinkley:
+  delta: 0.005
+  lambda: 0.05

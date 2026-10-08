@@ -184,9 +184,7 @@ def read_raw_file(path: Path) -> pd.DataFrame:
         skip_blank_lines=True,
     )
     for column in df.columns:
-        if pd.api.types.is_object_dtype(df[column]) or pd.api.types.is_string_dtype(
-            df[column]
-        ):
+        if pd.api.types.is_object_dtype(df[column]) or pd.api.types.is_string_dtype(df[column]):
             df[column] = df[column].str.strip()
     df[LABEL] = df[LABEL].str.rstrip(".")
     return df
@@ -205,9 +203,7 @@ def validate(df: pd.DataFrame) -> None:
     for column, (low, high) in NUMERIC_RANGES.items():
         series = df[column]
         if not pd.api.types.is_integer_dtype(series):
-            raise SchemaError(
-                f"column {column!r} must be integer, got dtype {series.dtype}"
-            )
+            raise SchemaError(f"column {column!r} must be integer, got dtype {series.dtype}")
         if series.isna().any():
             raise SchemaError(f"column {column!r} must not contain missing values")
         out_of_range = series[(series < low) | (series > high)]
@@ -223,9 +219,7 @@ def validate(df: pd.DataFrame) -> None:
             raise SchemaError(f"column {column!r} must not contain missing values")
         unknown = series.dropna()[~series.dropna().isin(allowed)].unique()
         if len(unknown) > 0:
-            raise SchemaError(
-                f"column {column!r} has unknown categories: {sorted(unknown)[:5]}"
-            )
+            raise SchemaError(f"column {column!r} has unknown categories: {sorted(unknown)[:5]}")
 
     labels = df[LABEL]
     if labels.isna().any():

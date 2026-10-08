@@ -5,8 +5,9 @@ import numpy as np
 import pandas as pd
 
 from driftmon.data import schema
+from driftmon.detectors.psi import quantile_bin_edges
 from driftmon.model import artifacts
-from driftmon.model.reference import compute_reference_stats, quantile_bin_edges
+from driftmon.model.reference import compute_reference_stats
 from driftmon.model.train import evaluate, train_models, write_baseline_report
 
 from .conftest import make_adult_frame

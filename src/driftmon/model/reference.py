@@ -3,13 +3,11 @@
 from dataclasses import dataclass
 from typing import Any
 
-import numpy as np
 import pandas as pd
 from sklearn.pipeline import Pipeline
 
 from driftmon.data import schema
-
-N_BINS = 10
+from driftmon.detectors.psi import quantile_bin_edges
 
 MISSING_CATEGORY = "missing"
 
@@ -74,14 +72,6 @@ class ReferenceStats:
             prediction_probs=payload["prediction_probs"],
             auc=payload["auc"],
         )
-
-
-def quantile_bin_edges(values: "np.ndarray[Any, np.dtype[np.float64]]") -> list[float]:
-    """Bin edges at reference quantiles; duplicate edges (heavy point masses
-    such as capital-gain == 0) are merged."""
-    quantiles = np.linspace(0.0, 1.0, N_BINS + 1)
-    edges = np.unique(np.quantile(values, quantiles))
-    return [float(e) for e in edges]
 
 
 def compute_reference_stats(
