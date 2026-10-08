@@ -1,0 +1,7 @@
+data_dir: data
+artifacts_dir: artifacts
+reports_dir: reports
+seed: 42
+window_size: 1000
+label_delay: 3
+log_level: INFO
