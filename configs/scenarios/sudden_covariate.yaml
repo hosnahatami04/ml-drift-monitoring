@@ -1,0 +1,10 @@
+name: sudden_covariate
+kind: sudden_covariate
+feature: age
+severity:
+  low:
+    beta: 0.25
+  medium:
+    beta: 0.5
+  high:
+    beta: 1.0
