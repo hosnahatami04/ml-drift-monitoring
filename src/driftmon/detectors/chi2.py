@@ -6,6 +6,7 @@ scipy.stats.chi2_contingency(correction=False) on the same table.
 """
 
 from collections import Counter
+from collections.abc import Mapping
 from typing import Any
 
 import numpy as np
@@ -16,8 +17,6 @@ from driftmon.detectors.base import TestResult
 OTHER_CATEGORY = "__other__"
 
 MIN_EXPECTED = 5.0
-
-StrArray = "np.ndarray[tuple[int], np.dtype[np.object_]]"
 
 
 def pearson_chi2(table: "np.ndarray[Any, np.dtype[np.float64]]") -> tuple[float, float, int]:
@@ -33,27 +32,26 @@ def pearson_chi2(table: "np.ndarray[Any, np.dtype[np.float64]]") -> tuple[float,
 
 
 def _merged_counts(
-    reference: "np.ndarray[tuple[int], np.dtype[np.object_]]",
-    current: "np.ndarray[tuple[int], np.dtype[np.object_]]",
+    ref_counts: Mapping[str, float], cur_counts: Mapping[str, float]
 ) -> tuple[list[str], list[tuple[float, float]]]:
-    ref_counts = Counter(str(v) for v in reference.tolist())
-    cur_counts = Counter(str(v) for v in current.tolist())
-
     # Categories the reference never saw cannot have a meaningful expected
     # count of their own; they are pooled into the catch-all bucket.
     categories: dict[str, tuple[float, float]] = {}
     other = [0.0, 0.0]
     for category in sorted(ref_counts):
-        categories[category] = (float(ref_counts[category]), float(cur_counts.get(category, 0)))
+        categories[category] = (
+            float(ref_counts[category]),
+            float(cur_counts.get(category, 0.0)),
+        )
     for category in sorted(set(cur_counts) - set(ref_counts)):
-        other[1] += cur_counts[category]
+        other[1] += float(cur_counts[category])
 
     n_ref = float(sum(ref_counts.values()))
     n_cur = float(sum(cur_counts.values()))
     total = n_ref + n_cur
     kept: dict[str, tuple[float, float]] = {}
     for category, (ref_n, cur_n) in categories.items():
-        category_total = ref_n + cur_n + 0.0
+        category_total = ref_n + cur_n
         expected_ref = category_total * n_ref / total
         expected_cur = category_total * n_cur / total
         if expected_ref < MIN_EXPECTED or expected_cur < MIN_EXPECTED:
@@ -70,15 +68,15 @@ def _merged_counts(
     return names, rows
 
 
-def chi2_test(
-    reference: "np.ndarray[tuple[int], np.dtype[np.object_]]",
-    current: "np.ndarray[tuple[int], np.dtype[np.object_]]",
+def chi2_from_counts(
+    ref_counts: Mapping[str, float],
+    cur_counts: Mapping[str, float],
     feature: str,
 ) -> TestResult:
-    if reference.size == 0 or current.size == 0:
+    if sum(ref_counts.values()) <= 0 or sum(cur_counts.values()) <= 0:
         raise ValueError("reference and current samples must be non-empty")
 
-    _, rows = _merged_counts(reference, current)
+    _, rows = _merged_counts(ref_counts, cur_counts)
     table = np.asarray(rows, dtype=float)
     if table.shape[0] < 2:
         # Everything collapsed into one bucket (constant feature or tiny
@@ -97,3 +95,15 @@ def chi2_test(
         p_value=p_value,
         effect_size=effect,
     )
+
+
+def chi2_test(
+    reference: "np.ndarray[tuple[int], np.dtype[np.object_]]",
+    current: "np.ndarray[tuple[int], np.dtype[np.object_]]",
+    feature: str,
+) -> TestResult:
+    if reference.size == 0 or current.size == 0:
+        raise ValueError("reference and current samples must be non-empty")
+    ref_counts = Counter(str(v) for v in reference.tolist())
+    cur_counts = Counter(str(v) for v in current.tolist())
+    return chi2_from_counts(ref_counts, cur_counts, feature)

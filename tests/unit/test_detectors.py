@@ -4,7 +4,12 @@ import numpy as np
 import pytest
 
 from driftmon.detectors.base import TestResult as DetectorResult
-from driftmon.detectors.chi2 import OTHER_CATEGORY, _merged_counts, chi2_test
+from driftmon.detectors.chi2 import (
+    OTHER_CATEGORY,
+    _merged_counts,
+    chi2_from_counts,
+    chi2_test,
+)
 from driftmon.detectors.ks import ks_p_value, ks_test, prediction_drift_test
 from driftmon.detectors.psi import psi_categorical, psi_numeric, quantile_bin_edges
 
@@ -149,8 +154,8 @@ class TestChi2:
         assert result.effect_size > 0.3
 
     def test_rare_categories_merge_into_other(self) -> None:
-        reference = np.array(["a"] * 500 + ["b"] * 500 + ["rare"] * 2, dtype=object)
-        current = np.array(["a"] * 500 + ["b"] * 500, dtype=object)
+        reference = {"a": 500.0, "b": 500.0, "rare": 2.0}
+        current = {"a": 500.0, "b": 500.0}
 
         names, rows = _merged_counts(reference, current)
 
@@ -159,13 +164,23 @@ class TestChi2:
         assert len(rows) == len(names)
 
     def test_unseen_current_category_goes_to_other(self) -> None:
-        reference = np.array(["a"] * 500 + ["b"] * 500, dtype=object)
-        current = np.array(["a"] * 400 + ["b"] * 400 + ["new"] * 200, dtype=object)
+        reference = {"a": 500.0, "b": 500.0}
+        current = {"a": 400.0, "b": 400.0, "new": 200.0}
 
         names, _ = _merged_counts(reference, current)
 
         assert OTHER_CATEGORY in names
         assert "new" not in names
+
+    def test_counts_and_array_paths_agree(self) -> None:
+        reference = np.array(["a"] * 300 + ["b"] * 200, dtype=object)
+        current = np.array(["a"] * 150 + ["b"] * 350, dtype=object)
+
+        from_arrays = chi2_test(reference, current, "x")
+        from_counts = chi2_from_counts({"a": 300.0, "b": 200.0}, {"a": 150.0, "b": 350.0}, "x")
+
+        assert from_arrays.statistic == pytest.approx(from_counts.statistic)
+        assert from_arrays.p_value == pytest.approx(from_counts.p_value or 0.0)
 
     def test_single_category_returns_no_evidence(self) -> None:
         constant = np.array(["only"] * 100, dtype=object)
