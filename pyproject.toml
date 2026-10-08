@@ -7,10 +7,14 @@ license = { text = "MIT" }
 authors = [{ name = "Hosna Hatami" }]
 requires-python = ">=3.11"
 dependencies = [
+    "pandas>=2.2",
+    "pyarrow>=18",
     "pydantic>=2.9",
     "pydantic-settings>=2.6",
     "pyyaml>=6.0",
+    "scikit-learn>=1.5",
     "typer>=0.15",
+    "xgboost>=2.1",
 ]
 
 [project.optional-dependencies]
@@ -45,9 +49,16 @@ python_version = "3.11"
 strict = true
 files = ["src"]
 
+[[tool.mypy.overrides]]
+module = ["pandas.*", "sklearn.*", "xgboost.*", "pyarrow.*"]
+ignore_missing_imports = true
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+markers = [
+    "data: needs the locally downloaded dataset and a trained artifact",
+]
 
 [tool.coverage.run]
 source = ["driftmon"]

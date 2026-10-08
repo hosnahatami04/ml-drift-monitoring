@@ -1,9 +1,15 @@
 export PYTHONHASHSEED = 0
 
-.PHONY: setup lint format typecheck test cov
+.PHONY: setup lint format typecheck test cov data train
 
 setup:
 	uv sync --extra dev
+
+data:
+	uv run driftmon download-data
+
+train:
+	uv run driftmon train
 
 lint:
 	uv run ruff check src tests
