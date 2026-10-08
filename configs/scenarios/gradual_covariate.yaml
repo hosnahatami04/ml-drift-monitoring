@@ -1,0 +1,11 @@
+name: gradual_covariate
+kind: gradual_covariate
+feature: hours-per-week
+ramp_windows: 15
+severity:
+  low:
+    beta: 0.25
+  medium:
+    beta: 0.5
+  high:
+    beta: 1.0
