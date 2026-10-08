@@ -103,6 +103,11 @@ class PageHinkleySettings(BaseModel):
     lambda_: float = Field(default=0.05, alias="lambda")
 
 
+class AlertSettings(BaseModel):
+    cooldown_windows: int = 3
+    critical_feature_count: int = 3
+
+
 class ThresholdsConfig(BaseModel):
     """Detection thresholds; initial values until calibration freezes them."""
 
@@ -111,6 +116,7 @@ class ThresholdsConfig(BaseModel):
     k_features: int = 1
     min_effect: EffectGates = EffectGates()
     page_hinkley: PageHinkleySettings = PageHinkleySettings()
+    alerts: AlertSettings = AlertSettings()
 
 
 def load_thresholds(path: Path | None = None) -> ThresholdsConfig:
@@ -146,6 +152,8 @@ class Settings(BaseSettings):
     stream: StreamConfig = StreamConfig()
     seeds: SeedsConfig = SeedsConfig()
     scenarios_dir: Path = Path("configs") / "scenarios"
+    thresholds_path: Path = DEFAULT_THRESHOLDS_PATH
+    db_path: Path = Path("data") / "driftmon.db"
 
     @property
     def raw_data_dir(self) -> Path:

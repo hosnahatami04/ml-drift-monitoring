@@ -199,3 +199,75 @@ def calibrate_severity(config: ConfigOption = DEFAULT_CONFIG_PATH) -> None:
         typer.echo(
             f"{m.scenario}/{m.severity}: {detail}, auc {m.auc_drifted:.4f} ({m.auc_delta:+.4f})"
         )
+
+
+@app.command()
+def replay(
+    scenario: Annotated[str, typer.Option(help="Scenario name, e.g. sudden_covariate.")],
+    severity: Annotated[str, typer.Option(help="low, medium or high.")] = "medium",
+    seed: Annotated[int, typer.Option(help="Stream seed.")] = 100,
+    config: ConfigOption = DEFAULT_CONFIG_PATH,
+) -> None:
+    """Send one simulated stream through the live API and show the alerts."""
+    from fastapi.testclient import TestClient
+
+    from driftmon.data import schema, split
+    from driftmon.service.api import build_state, create_app
+    from driftmon.simulation import sampler
+    from driftmon.simulation.scenarios import StreamParams, generate_stream, load_scenario
+
+    settings = _load(config)
+    pool = split.load_split(settings.processed_data_dir, "stream_pool")
+    reference = split.load_split(settings.processed_data_dir, "reference")
+    scenario_config = load_scenario(settings.scenarios_dir / f"{scenario}.yaml")
+    params = StreamParams.from_settings(settings)
+    stats = sampler.reference_feature_stats(reference, schema.NUMERIC_FEATURES)
+
+    db_path = settings.db_path.parent / f"replay-{scenario}-{severity}-{seed}.db"
+    for stale in (db_path, db_path.with_suffix(".alerts.jsonl")):
+        stale.unlink(missing_ok=True)
+    for suffix in ("-wal", "-shm"):
+        Path(str(db_path) + suffix).unlink(missing_ok=True)
+    state = build_state(settings, db_path=db_path)
+    client = TestClient(create_app(state))
+
+    level = None if scenario_config.kind == "control" else severity
+    pending_labels: dict[int, list[tuple[str, int]]] = {}
+    typer.echo(f"replaying {params.n_windows} windows of {params.window_size} rows")
+    for window in generate_stream(pool, stats, scenario_config, level, seed, params):
+        for arrived in [w for w in pending_labels if w <= window.index]:
+            for request_id, label in pending_labels.pop(arrived):
+                client.post("/labels", json={"request_id": request_id, "label": label})
+        rows = window.X[list(schema.MODEL_FEATURES)].to_dict(orient="records")
+        ids: list[tuple[str, int]] = []
+        for row, label in zip(rows, window.y_true.tolist(), strict=True):
+            payload = {k: v for k, v in row.items() if v == v}
+            response = client.post("/predict", json=payload)
+            response.raise_for_status()
+            ids.append((response.json()["request_id"], int(label)))
+        pending_labels[window.label_available_at] = ids
+
+    alerts = client.get("/alerts", params={"limit": 1000}).json()
+    typer.echo(f"alerts: {len(alerts)}")
+    for alert in sorted(alerts, key=lambda a: a["window_id"]):
+        features = ",".join(alert["features"]) or "-"
+        typer.echo(
+            f"  window {alert['window_id']:>3}  {alert['type']:<18} "
+            f"{alert['severity']:<8} {features}"
+        )
+    typer.echo(f"db: {db_path}")
+
+
+@app.command()
+def serve(
+    host: Annotated[str, typer.Option(help="Bind address.")] = "127.0.0.1",
+    port: Annotated[int, typer.Option(help="Port.")] = 8000,
+    config: ConfigOption = DEFAULT_CONFIG_PATH,
+) -> None:
+    """Run the prediction service."""
+    import uvicorn
+
+    from driftmon.service.api import build_state, create_app
+
+    settings = _load(config)
+    uvicorn.run(create_app(build_state(settings)), host=host, port=port)
