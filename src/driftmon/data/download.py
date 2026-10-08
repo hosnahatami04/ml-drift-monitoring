@@ -45,7 +45,7 @@ def fetch(url: str, dest: Path, *, retries: int = 3, timeout: float = 60.0) -> N
     for attempt in range(1, retries + 1):
         try:
             logger.info("downloading %s (attempt %d/%d)", url, attempt, retries)
-            with urllib.request.urlopen(url, timeout=timeout) as response:  # noqa: S310
+            with urllib.request.urlopen(url, timeout=timeout) as response:
                 tmp.write_bytes(response.read())
             tmp.replace(dest)
             return
@@ -107,9 +107,7 @@ def fetch_openml_fallback(settings: Settings) -> pd.DataFrame:
 
     source = settings.dataset.openml
     logger.info("falling back to OpenML (name=%s, version=%d)", source.name, source.version)
-    bundle = fetch_openml(
-        name=source.name, version=source.version, as_frame=True, parser="auto"
-    )
+    bundle = fetch_openml(name=source.name, version=source.version, as_frame=True, parser="auto")
     df = normalize_openml(bundle.frame)
     fingerprint = frame_fingerprint(df)
     if source.sha256 is None:
@@ -120,8 +118,7 @@ def fetch_openml_fallback(settings: Settings) -> pd.DataFrame:
         )
     if fingerprint != source.sha256:
         raise DownloadError(
-            f"OpenML fallback fingerprint mismatch: expected {source.sha256}, "
-            f"got {fingerprint}"
+            f"OpenML fallback fingerprint mismatch: expected {source.sha256}, got {fingerprint}"
         )
     return df
 
