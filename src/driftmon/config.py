@@ -167,6 +167,23 @@ def load_thresholds(path: Path | None = None) -> ThresholdsConfig:
         raise ConfigError(f"invalid thresholds in {resolved}: {exc}") from exc
 
 
+class ServiceConfig(BaseModel):
+    # Off in the compose stack, where a separate `driftmon monitor` worker
+    # owns window processing; on for a single local process.
+    inline_monitoring: bool = True
+    monitor_interval_seconds: float = 2.0
+    monitor_metrics_port: int = 9100
+    webhook_url: str | None = None
+
+
+class TelemetryConfig(BaseModel):
+    """OTLP export switches on when the standard OTEL_EXPORTER_OTLP_ENDPOINT
+    variable is set; otherwise spans go to `trace_exporter`."""
+
+    trace_exporter: Literal["console", "none"] = "console"
+    trace_sample_ratio: float = Field(default=1.0, ge=0.0, le=1.0)
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_prefix=ENV_PREFIX, env_nested_delimiter="__", extra="forbid"
@@ -184,6 +201,8 @@ class Settings(BaseSettings):
     stream: StreamConfig = StreamConfig()
     seeds: SeedsConfig = SeedsConfig()
     evaluation: EvaluationConfig = EvaluationConfig()
+    service: ServiceConfig = ServiceConfig()
+    telemetry: TelemetryConfig = TelemetryConfig()
     scenarios_dir: Path = Path("configs") / "scenarios"
     thresholds_path: Path = DEFAULT_THRESHOLDS_PATH
     db_path: Path = Path("data") / "driftmon.db"

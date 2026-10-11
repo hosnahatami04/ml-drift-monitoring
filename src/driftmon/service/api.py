@@ -1,12 +1,15 @@
 """FastAPI prediction service wired to the shared monitoring core."""
 
 import logging
+import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 import pandas as pd
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Response
+from opentelemetry import trace
 
 from driftmon.config import Settings, load_thresholds
 from driftmon.data import schema as data_schema
@@ -19,6 +22,8 @@ from driftmon.model.artifacts import (
 from driftmon.monitoring.alerts import AlertManager, AlertSink, JsonlSink, WebhookSink
 from driftmon.monitoring.monitor import Monitor
 from driftmon.monitoring.runner import MonitorRunner
+from driftmon.observability.metrics import Metrics, MetricsAlertSink
+from driftmon.observability.tracing import get_tracer
 from driftmon.service.schemas import (
     AlertRecord,
     HealthResponse,
@@ -37,6 +42,8 @@ class ServiceState:
     artifact: ModelArtifact
     store: Store
     runner: MonitorRunner
+    metrics: Metrics
+    inline_monitoring: bool = True
 
 
 def build_state(
@@ -44,7 +51,10 @@ def build_state(
     artifact: ModelArtifact | None = None,
     db_path: Path | None = None,
     webhook_url: str | None = None,
+    role: Literal["service", "monitor"] = "service",
 ) -> ServiceState:
+    """Wire the store, monitor and alerting. The monitor worker builds the
+    same state with role="monitor" and never serves requests."""
     if artifact is None:
         artifact = load_artifact(latest_artifact_dir(settings.artifacts_dir))
     thresholds = load_thresholds(settings.thresholds_path)
@@ -54,26 +64,46 @@ def build_state(
         SqliteAlertSink(store),
         JsonlSink((db_path or settings.db_path).with_suffix(".alerts.jsonl")),
     ]
+    webhook_url = webhook_url or settings.service.webhook_url
     if webhook_url:
         sinks.append(WebhookSink(webhook_url))
+    inline = settings.service.inline_monitoring
+    metrics = Metrics(service=role == "service", monitor=role == "monitor" or inline)
+    sinks.append(MetricsAlertSink(metrics))
     manager = AlertManager(thresholds.alerts, sinks)
-    runner = MonitorRunner(store, monitor, manager)
-    return ServiceState(artifact=artifact, store=store, runner=runner)
+    runner = MonitorRunner(store, monitor, manager, metrics=metrics)
+    return ServiceState(
+        artifact=artifact,
+        store=store,
+        runner=runner,
+        metrics=metrics,
+        inline_monitoring=inline,
+    )
 
 
-def create_app(state: ServiceState) -> FastAPI:
+def create_app(state: ServiceState, tracer: trace.Tracer | None = None) -> FastAPI:
     app = FastAPI(title="driftmon", version="0.1.0")
     model = state.artifact.model
+    if tracer is None:
+        tracer = get_tracer()
+    else:
+        # Inline monitoring spans should land in the same provider as the
+        # request spans that trigger them.
+        state.runner.tracer = tracer
 
     @app.post("/predict", response_model=PredictResponse)
     def predict(request: PredictRequest) -> PredictResponse:
-        features = request.to_feature_dict()
-        frame = pd.DataFrame([features])[list(data_schema.MODEL_FEATURES)]
-        probability = float(model.predict_proba(frame)[0, 1])
-        request_id = uuid.uuid4().hex
-        _, row_count = state.store.insert_prediction(request_id, features, probability)
-        if row_count >= state.store.window_size:
-            state.runner.process_complete_windows()
+        start = time.perf_counter()
+        with tracer.start_as_current_span("predict") as span:
+            features = request.to_feature_dict()
+            frame = pd.DataFrame([features])[list(data_schema.MODEL_FEATURES)]
+            probability = float(model.predict_proba(frame)[0, 1])
+            request_id = uuid.uuid4().hex
+            window_id, row_count = state.store.insert_prediction(request_id, features, probability)
+            span.set_attribute("driftmon.window_id", window_id)
+            if state.inline_monitoring and row_count >= state.store.window_size:
+                state.runner.process_complete_windows()
+        state.metrics.observe_prediction(time.perf_counter() - start)
         return PredictResponse(request_id=request_id, probability=probability)
 
     @app.post("/labels", response_model=LabelResponse)
@@ -84,8 +114,15 @@ def create_app(state: ServiceState) -> FastAPI:
                 status_code=404,
                 detail=f"no prediction with request_id {request.request_id!r}",
             )
-        state.runner.process_labelled_windows()
+        state.metrics.observe_label()
+        if state.inline_monitoring:
+            state.runner.process_labelled_windows()
         return LabelResponse(request_id=request.request_id, attached=True)
+
+    @app.get("/metrics")
+    def metrics() -> Response:
+        body, content_type = state.metrics.render()
+        return Response(content=body, media_type=content_type)
 
     @app.get("/health", response_model=HealthResponse)
     def health() -> HealthResponse:
