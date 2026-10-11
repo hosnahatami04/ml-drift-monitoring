@@ -8,6 +8,7 @@ evaluation measures exactly the code that runs in production.
 """
 
 from collections import Counter
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -87,6 +88,13 @@ class Monitor:
         probabilities: FloatArray,
     ) -> WindowReport:
         """Run every input-side detector on one complete window."""
+        results = self.run_tests(features, probabilities)
+        return self.decide(window_id, len(features), results)
+
+    def run_tests(self, features: pd.DataFrame, probabilities: FloatArray) -> list[TestResult]:
+        """The expensive, threshold-independent half of process_window. Split
+        out so calibration can score many threshold sets against one pass of
+        the detectors."""
         if len(features) == 0:
             raise ValueError("cannot monitor an empty window")
         if len(features) != probabilities.size:
@@ -116,7 +124,9 @@ class Monitor:
             cur_counts = Counter(current_values.tolist())
             results.append(chi2_from_counts(ref_counts, dict(cur_counts), name))
         results.append(prediction_drift_test(self._reference_probs, probabilities))
+        return results
 
+    def decide(self, window_id: int, n_rows: int, results: Sequence[TestResult]) -> WindowReport:
         decision = decide_window(results, self.decision_config)
         prediction_flagged = any(
             r.flagged and r.method == "prediction_ks" for r in decision.results
@@ -124,7 +134,7 @@ class Monitor:
         input_features = tuple(f for f in decision.flagged_features if f != "__prediction__")
         return WindowReport(
             window_id=window_id,
-            n_rows=len(features),
+            n_rows=n_rows,
             results=decision.results,
             flagged_features=input_features,
             feature_drift=len(input_features) >= self.decision_config.k_features,

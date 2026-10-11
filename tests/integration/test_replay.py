@@ -1,5 +1,5 @@
 """End-to-end: simulated streams through the live API, alerts out the other
-side. Small windows keep it fast; the code path is the production one."""
+side, at the window size the frozen thresholds were calibrated for."""
 
 from pathlib import Path
 
@@ -22,7 +22,10 @@ from ..unit.conftest import make_adult_frame
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
-PARAMS = StreamParams(n_windows=8, window_size=250, drift_start=3, label_delay=2)
+# The frozen thresholds are calibrated for 1000-row windows. At smaller
+# windows the PSI gate false-alarms (window-size ablation in
+# reports/results.md), and that alarm's cooldown can hide the real drift.
+PARAMS = StreamParams(n_windows=6, window_size=1000, drift_start=3, label_delay=2)
 
 CONTROL = ScenarioConfig(name="control", kind="control")
 

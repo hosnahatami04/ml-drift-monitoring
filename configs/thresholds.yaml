@@ -1,11 +1,12 @@
-# Initial values; calibrated and frozen in the evaluation phase.
-alpha: 0.01
+# Frozen by `driftmon calibrate` on calibration seeds 0-19.
+# Do not edit by hand: re-run calibration instead (ADR 0008).
+alpha: 0.001
 correction: bonferroni
 k_features: 1
 min_effect:
-  ks_d: 0.05
+  ks_d: 0.04
   psi: 0.1
-  cramers_v: 0.05
+  cramers_v: 0.1
 page_hinkley:
   delta: 0.005
   lambda: 0.05

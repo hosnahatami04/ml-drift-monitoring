@@ -22,8 +22,8 @@ Logistic regression baseline and XGBoost on the UCI Adult income task
 | --- | --- | --- | --- | --- | --- |
 | logistic_regression | validation | 0.9097 | 0.8555 | 0.6738 | 0.1009 |
 | logistic_regression | reference | 0.9051 | 0.8543 | 0.6609 | 0.1016 |
-| xgboost | validation | 0.9308 | 0.8735 | 0.7192 | 0.0874 |
-| xgboost | reference | 0.9270 | 0.8739 | 0.7136 | 0.0888 |
+| xgboost | validation | 0.9312 | 0.8746 | 0.7211 | 0.0872 |
+| xgboost | reference | 0.9272 | 0.8758 | 0.7194 | 0.0886 |
 
 ## Environment
 
