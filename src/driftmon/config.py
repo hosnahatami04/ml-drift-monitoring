@@ -90,6 +90,38 @@ class SeedsConfig(BaseModel):
         return self
 
 
+class CalibrationGrid(BaseModel):
+    """Search space for threshold calibration. Input-side and Page-Hinkley
+    parameters are searched as a full product."""
+
+    alpha: list[float] = [0.001, 0.01, 0.05]
+    ks_d: list[float] = [0.04, 0.06, 0.08, 0.1]
+    psi: list[float] = [0.05, 0.1, 0.15, 0.2, 0.25]
+    cramers_v: list[float] = [0.05, 0.075, 0.1]
+    k_features: list[int] = [1, 2]
+    ph_delta: list[float] = [0.0, 0.0025, 0.005, 0.01]
+    ph_lambda: list[float] = [0.01, 0.02, 0.03, 0.05, 0.075, 0.1, 0.15, 0.2, 0.3]
+    severity: str = "medium"
+    max_stream_false_alarm_rate: float = 0.10
+
+
+class EvaluationConfig(BaseModel):
+    n_workers: int = 4
+    bootstrap_samples: int = 1000
+    bootstrap_seed: int = 2026
+    degradation_margin: float = 0.03
+    target_severity: str = "medium"
+    correctness_cases: int = 300
+    # Ablation over window size keeps the traffic volume fixed: drift start,
+    # horizon, label delay and scenario timing are scaled from rows, not
+    # windows, so every arm watches the same 60k-row stream.
+    ablation_window_sizes: list[int] = [250, 500, 1000, 2000]
+    ablation_severity: str = "medium"
+    smoke_seed_count: int = 5
+    smoke_severities: list[str] = ["medium"]
+    calibration: CalibrationGrid = CalibrationGrid()
+
+
 class EffectGates(BaseModel):
     ks_d: float = 0.05
     psi: float = 0.1
@@ -151,6 +183,7 @@ class Settings(BaseSettings):
     splits: SplitFractions = SplitFractions()
     stream: StreamConfig = StreamConfig()
     seeds: SeedsConfig = SeedsConfig()
+    evaluation: EvaluationConfig = EvaluationConfig()
     scenarios_dir: Path = Path("configs") / "scenarios"
     thresholds_path: Path = DEFAULT_THRESHOLDS_PATH
     db_path: Path = Path("data") / "driftmon.db"

@@ -201,6 +201,137 @@ def calibrate_severity(config: ConfigOption = DEFAULT_CONFIG_PATH) -> None:
         )
 
 
+WorkersOption = Annotated[
+    int | None,
+    typer.Option(help="Worker processes; defaults to evaluation.n_workers from the config."),
+]
+
+
+@app.command()
+def calibrate(workers: WorkersOption = None, config: ConfigOption = DEFAULT_CONFIG_PATH) -> None:
+    """Search detection thresholds on calibration seeds and freeze them in
+    the thresholds file."""
+    import json
+
+    from driftmon.config import load_thresholds
+    from driftmon.evaluation import calibration, harness
+    from driftmon.simulation.scenarios import StreamParams, load_scenarios
+
+    settings = _load(config)
+    n_workers = workers or settings.evaluation.n_workers
+    grid = settings.evaluation.calibration
+    seeds = settings.seeds.calibration
+    calibration.ensure_calibration_seeds(seeds, settings.seeds)
+
+    inputs, artifact = harness.prepare_inputs(settings)
+    tasks = harness.build_tasks(
+        load_scenarios(settings.scenarios_dir),
+        [grid.severity],
+        seeds,
+        StreamParams.from_settings(settings),
+        settings.stream.detection_horizon,
+    )
+    records = harness.run_streams(tasks, inputs, n_workers)
+    result = calibration.calibrate(
+        records,
+        artifact.reference,
+        load_thresholds(settings.thresholds_path),
+        grid,
+        settings.seeds,
+        n_workers,
+    )
+    calibration.write_thresholds(settings.thresholds_path, result.thresholds, seeds)
+    summary_path = settings.artifacts_dir / "calibration.json"
+    summary_path.parent.mkdir(parents=True, exist_ok=True)
+    summary_path.write_text(json.dumps(result.summary(), indent=2), encoding="utf-8")
+
+    typer.echo(f"thresholds: {settings.thresholds_path}")
+    typer.echo(f"selection summary (calibration seeds, not a KPI report): {summary_path}")
+    if not result.feasible:
+        typer.echo("warning: no candidate met the false alarm ceiling", err=True)
+
+
+@app.command()
+def evaluate(
+    smoke: Annotated[
+        bool, typer.Option(help="Small subset (first evaluation seeds, medium severity).")
+    ] = False,
+    out_dir: Annotated[
+        Path | None,
+        typer.Option(help="Output directory; defaults to reports/ (smoke: artifacts/smoke/)."),
+    ] = None,
+    workers: WorkersOption = None,
+    config: ConfigOption = DEFAULT_CONFIG_PATH,
+) -> None:
+    """Score the frozen thresholds on evaluation seeds and write the KPI report."""
+    from dataclasses import asdict
+
+    from driftmon.config import load_thresholds
+    from driftmon.evaluation import harness, report
+    from driftmon.evaluation.calibration import thresholds_document
+    from driftmon.model import artifacts
+    from driftmon.simulation.scenarios import load_scenarios
+
+    settings = _load(config)
+    evaluation = settings.evaluation
+    n_workers = workers or evaluation.n_workers
+    target = out_dir or (settings.artifacts_dir / "smoke" if smoke else settings.reports_dir)
+
+    inputs, artifact = harness.prepare_inputs(settings)
+    artifact_dir = artifacts.latest_artifact_dir(settings.artifacts_dir)
+    scenarios = load_scenarios(settings.scenarios_dir)
+    thresholds = load_thresholds(settings.thresholds_path)
+
+    run = harness.run_evaluation(
+        settings, inputs, scenarios, thresholds, smoke=smoke, n_workers=n_workers
+    )
+    hashed_settings = settings.model_dump(
+        mode="json", exclude={"log_level": True, "evaluation": {"n_workers"}}
+    )
+    provenance = {
+        "artifact": artifact_dir.name,
+        "model_sha256": report.file_sha256(artifact_dir / "model.pkl"),
+        "reference_sha256": report.file_sha256(artifact_dir / "reference.json"),
+        "reference_auc": artifact.reference.auc,
+        "config_sha256": report.config_sha256(
+            {
+                "settings": hashed_settings,
+                "thresholds": thresholds_document(thresholds),
+                "scenarios": {n: s.model_dump(mode="json") for n, s in scenarios.items()},
+            }
+        ),
+        "thresholds": thresholds_document(thresholds),
+        "seeds": run.seeds,
+        "calibration_seeds": settings.seeds.calibration,
+        "severities": run.severities,
+        "stream": asdict(run.params),
+        "horizon": run.horizon,
+        "degradation_margin": evaluation.degradation_margin,
+        "bootstrap": {"samples": evaluation.bootstrap_samples, "seed": evaluation.bootstrap_seed},
+        "library_versions": artifacts.library_versions(),
+    }
+    document = report.build_results(
+        run,
+        smoke=smoke,
+        target_severity=evaluation.target_severity,
+        provenance=provenance,
+        correctness=harness.detector_correctness(
+            evaluation.bootstrap_seed, evaluation.correctness_cases
+        ),
+        samples=evaluation.bootstrap_samples,
+        seed=evaluation.bootstrap_seed,
+    )
+    report.write_json(target / "results.json", document)
+    report.write_markdown(target / "results.md", document)
+    if not smoke:
+        report.write_figures(target / "figures", document)
+
+    typer.echo(f"results: {target / 'results.json'}")
+    for row in document.kpis:
+        status = {True: "met", False: "MISSED", None: "-"}[row.met]
+        typer.echo(f"  {row.key:<36} {row.estimate.value!s:<24} {status}")
+
+
 @app.command()
 def replay(
     scenario: Annotated[str, typer.Option(help="Scenario name, e.g. sudden_covariate.")],
