@@ -1,0 +1,96 @@
+name: driftmon
+
+x-env: &env
+  DRIFTMON_DB_PATH: /app/state/driftmon.db
+  DRIFTMON_ARTIFACTS_DIR: /app/artifacts
+  DRIFTMON_REPORTS_DIR: /app/reports
+
+x-app: &app
+  build: .
+  image: driftmon:local
+  restart: unless-stopped
+  volumes:
+    - state:/app/state
+    # The model artifact and evaluation report are produced on the host
+    # (make data train evaluate) and mounted read-only.
+    - ./artifacts:/app/artifacts:ro
+    - ./reports:/app/reports:ro
+
+services:
+  api:
+    <<: *app
+    command: ["driftmon", "serve", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      <<: *env
+      DRIFTMON_SERVICE__INLINE_MONITORING: "false"
+      # One span per request is noise at replay rates; sample 1%.
+      DRIFTMON_TELEMETRY__TRACE_SAMPLE_RATIO: "0.01"
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=3)"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  monitor:
+    <<: *app
+    command: ["driftmon", "monitor", "--metrics-port", "9100"]
+    environment:
+      <<: *env
+    ports:
+      - "9100:9100"
+    depends_on:
+      api:
+        # The API migrates the store schema; the worker starts after it.
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9100/metrics', timeout=3)"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  dashboard:
+    <<: *app
+    command:
+      - streamlit
+      - run
+      - src/driftmon/dashboard/app.py
+      - --server.port=8501
+      - --server.address=0.0.0.0
+      - --server.headless=true
+      - --browser.gatherUsageStats=false
+    environment:
+      <<: *env
+    ports:
+      - "8501:8501"
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8501/_stcore/health', timeout=3)"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
+
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    restart: unless-stopped
+    volumes:
+      - ./deploy/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"
+    depends_on:
+      - api
+      - monitor
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:9090/-/healthy"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+volumes:
+  state: {}
