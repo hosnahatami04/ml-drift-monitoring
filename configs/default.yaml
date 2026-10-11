@@ -33,3 +33,25 @@ seeds:
   calibration_count: 20
   evaluation_start: 100
   evaluation_count: 30
+
+evaluation:
+  n_workers: 4
+  bootstrap_samples: 1000
+  bootstrap_seed: 2026
+  degradation_margin: 0.03
+  target_severity: medium
+  correctness_cases: 300
+  ablation_window_sizes: [250, 500, 1000, 2000]
+  ablation_severity: medium
+  smoke_seed_count: 5
+  smoke_severities: [medium]
+  calibration:
+    severity: medium
+    max_stream_false_alarm_rate: 0.10
+    alpha: [0.001, 0.01, 0.05]
+    ks_d: [0.04, 0.06, 0.08, 0.1]
+    psi: [0.05, 0.1, 0.15, 0.2, 0.25]
+    cramers_v: [0.05, 0.075, 0.1]
+    k_features: [1, 2]
+    ph_delta: [0.0, 0.0025, 0.005, 0.01]
+    ph_lambda: [0.01, 0.02, 0.03, 0.05, 0.075, 0.1, 0.15, 0.2, 0.3]
