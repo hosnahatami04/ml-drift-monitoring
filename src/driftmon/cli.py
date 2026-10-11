@@ -337,13 +337,18 @@ def replay(
     scenario: Annotated[str, typer.Option(help="Scenario name, e.g. sudden_covariate.")],
     severity: Annotated[str, typer.Option(help="low, medium or high.")] = "medium",
     seed: Annotated[int, typer.Option(help="Stream seed.")] = 100,
+    url: Annotated[
+        str | None,
+        typer.Option(help="Base URL of a running service; omit to replay in-process."),
+    ] = None,
+    wait: Annotated[
+        float, typer.Option(help="Seconds to wait for a separate monitor to catch up.")
+    ] = 60.0,
     config: ConfigOption = DEFAULT_CONFIG_PATH,
 ) -> None:
-    """Send one simulated stream through the live API and show the alerts."""
-    from fastapi.testclient import TestClient
-
+    """Send one simulated stream through the API and show the alerts it raised."""
     from driftmon.data import schema, split
-    from driftmon.service.api import build_state, create_app
+    from driftmon.service import client as api_client
     from driftmon.simulation import sampler
     from driftmon.simulation.scenarios import StreamParams, generate_stream, load_scenario
 
@@ -354,39 +359,54 @@ def replay(
     params = StreamParams.from_settings(settings)
     stats = sampler.reference_feature_stats(reference, schema.NUMERIC_FEATURES)
 
-    db_path = settings.db_path.parent / f"replay-{scenario}-{severity}-{seed}.db"
-    for stale in (db_path, db_path.with_suffix(".alerts.jsonl")):
-        stale.unlink(missing_ok=True)
-    for suffix in ("-wal", "-shm"):
-        Path(str(db_path) + suffix).unlink(missing_ok=True)
-    state = build_state(settings, db_path=db_path)
-    client = TestClient(create_app(state))
+    client: api_client.ApiClient
+    db_path: Path | None = None
+    if url is not None:
+        client = api_client.HttpClient(url)
+    else:
+        from fastapi.testclient import TestClient
+
+        from driftmon.service.api import build_state, create_app
+
+        db_path = settings.db_path.parent / f"replay-{scenario}-{severity}-{seed}.db"
+        for stale in (db_path, db_path.with_suffix(".alerts.jsonl")):
+            stale.unlink(missing_ok=True)
+        for suffix in ("-wal", "-shm"):
+            Path(str(db_path) + suffix).unlink(missing_ok=True)
+        local = settings.model_copy(
+            update={"service": settings.service.model_copy(update={"inline_monitoring": True})}
+        )
+        client = api_client.InProcessClient(
+            TestClient(create_app(build_state(local, db_path=db_path)))
+        )
+
+    before = int(client.health()["predictions"])
+    if before % params.window_size:
+        typer.echo(
+            f"warning: the service already holds {before} predictions, not a whole number "
+            f"of {params.window_size}-row windows; this stream's windows will be shifted",
+            err=True,
+        )
+    first_window = before // params.window_size
 
     level = None if scenario_config.kind == "control" else severity
-    pending_labels: dict[int, list[tuple[str, int]]] = {}
     typer.echo(f"replaying {params.n_windows} windows of {params.window_size} rows")
-    for window in generate_stream(pool, stats, scenario_config, level, seed, params):
-        for arrived in [w for w in pending_labels if w <= window.index]:
-            for request_id, label in pending_labels.pop(arrived):
-                client.post("/labels", json={"request_id": request_id, "label": label})
-        rows = window.X[list(schema.MODEL_FEATURES)].to_dict(orient="records")
-        ids: list[tuple[str, int]] = []
-        for row, label in zip(rows, window.y_true.tolist(), strict=True):
-            payload = {k: v for k, v in row.items() if v == v}
-            response = client.post("/predict", json=payload)
-            response.raise_for_status()
-            ids.append((response.json()["request_id"], int(label)))
-        pending_labels[window.label_available_at] = ids
+    api_client.replay_windows(
+        client, generate_stream(pool, stats, scenario_config, level, seed, params)
+    )
+    if url is not None:
+        api_client.wait_for_monitor(client, params.window_size, timeout=wait)
 
-    alerts = client.get("/alerts", params={"limit": 1000}).json()
+    alerts = [a for a in client.alerts(limit=10_000) if a["window_id"] >= first_window]
     typer.echo(f"alerts: {len(alerts)}")
     for alert in sorted(alerts, key=lambda a: a["window_id"]):
         features = ",".join(alert["features"]) or "-"
         typer.echo(
-            f"  window {alert['window_id']:>3}  {alert['type']:<18} "
+            f"  window {alert['window_id'] - first_window:>3}  {alert['type']:<18} "
             f"{alert['severity']:<8} {features}"
         )
-    typer.echo(f"db: {db_path}")
+    if db_path is not None:
+        typer.echo(f"db: {db_path}")
 
 
 @app.command()
@@ -398,7 +418,41 @@ def serve(
     """Run the prediction service."""
     import uvicorn
 
+    from driftmon.observability.tracing import setup_tracing
     from driftmon.service.api import build_state, create_app
 
     settings = _load(config)
+    setup_tracing(settings.telemetry, "driftmon-api")
     uvicorn.run(create_app(build_state(settings)), host=host, port=port)
+
+
+@app.command()
+def monitor(
+    metrics_port: Annotated[
+        int | None, typer.Option(help="Port for /metrics; defaults to the config value.")
+    ] = None,
+    config: ConfigOption = DEFAULT_CONFIG_PATH,
+) -> None:
+    """Run the monitoring worker against the shared prediction store."""
+    import signal
+    import threading
+
+    from prometheus_client import start_http_server
+
+    from driftmon.monitoring.runner import poll
+    from driftmon.observability.tracing import setup_tracing
+    from driftmon.service.api import build_state
+
+    settings = _load(config)
+    setup_tracing(settings.telemetry, "driftmon-monitor")
+    state = build_state(settings, role="monitor")
+    state.runner.restore_state()
+    port = metrics_port or settings.service.monitor_metrics_port
+    start_http_server(port, registry=state.metrics.registry)
+    typer.echo(f"monitor polling {settings.db_path}, metrics on :{port}")
+
+    stop = threading.Event()
+    signal.signal(signal.SIGTERM, lambda *_: stop.set())
+    signal.signal(signal.SIGINT, lambda *_: stop.set())
+    poll(state.runner, settings.service.monitor_interval_seconds, stop)
+    state.store.close()
