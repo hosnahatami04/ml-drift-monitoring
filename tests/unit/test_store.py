@@ -1,8 +1,10 @@
+import sqlite3
 import threading
 from pathlib import Path
 
 import pytest
 
+from driftmon.config import ConfigError
 from driftmon.monitoring.alerts import Alert
 from driftmon.monitoring.windowing import is_window_complete, window_id_for
 from driftmon.service.store import Store
@@ -47,8 +49,10 @@ def test_prediction_roundtrip(store: Store) -> None:
 def test_label_attachment(store: Store) -> None:
     store.insert_prediction("req-1", {"age": 40}, 0.7)
 
-    assert store.attach_label("req-1", 1)
-    assert not store.attach_label("missing", 0)
+    assert store.attach_label("req-1", 1) is True
+    assert store.attach_label("missing", 0) is None
+    # A repeat never overwrites: the first label may already be in an error rate.
+    assert store.attach_label("req-1", 0) is False
     assert store.window_predictions(0)[0].label == 1
 
 
@@ -128,7 +132,7 @@ def test_alert_roundtrip(store: Store) -> None:
 
     store.insert_alert(alert)
 
-    records = store.list_alerts()
+    records = store.list_alerts(limit=100)
     assert len(records) == 1
     assert records[0]["window_id"] == 3
     assert records[0]["features"] == ["age"]
@@ -141,3 +145,88 @@ def test_store_reopens_without_remigrating(tmp_path: Path) -> None:
     second = Store(tmp_path / "db.sqlite", window_size=5)
 
     assert second.prediction_count() == 1
+
+
+def report(window_id: int, n_rows: int = 5) -> dict[str, object]:
+    return {
+        "window_id": window_id,
+        "n_rows": n_rows,
+        "results": [],
+        "flagged_features": [],
+        "feature_drift": False,
+        "prediction_drift": False,
+    }
+
+
+def fill_windows(store: Store, n_windows: int) -> None:
+    for i in range(n_windows * 5):
+        store.insert_prediction(f"req-{i}", {"age": 40}, 0.5)
+    for window_id in range(n_windows):
+        store.save_window_report(report(window_id))
+
+
+def test_a_window_can_be_claimed_only_once(store: Store) -> None:
+    fill_windows(store, 1)
+
+    assert store.save_window_report(report(0)) is False
+    assert store.mark_performance_checked(0, 0.1) is True
+    assert store.mark_performance_checked(0, 0.9) is False
+    # The losing claim must not reset the winner's performance check.
+    store.save_window_report(report(0))
+    assert store.checked_error_rates() == [0.1]
+
+
+def test_restore_order_follows_the_order_windows_were_checked(store: Store) -> None:
+    fill_windows(store, 2)
+    for i in range(5, 10):
+        store.attach_label(f"req-{i}", 1)
+
+    # Window 1 is fully labelled first, so it reaches the detector first.
+    assert store.windows_awaiting_performance() == [1]
+    store.mark_performance_checked(1, 0.3)
+    for i in range(5):
+        store.attach_label(f"req-{i}", 0)
+    assert store.windows_awaiting_performance() == [0]
+    store.mark_performance_checked(0, 0.1)
+
+    assert store.checked_error_rates() == [0.3, 0.1]
+    assert store.fully_labelled_count() == 2
+    assert store.performance_checked_count() == 2
+
+
+def test_an_incomplete_window_does_not_block_later_ones(store: Store) -> None:
+    fill_windows(store, 2)
+    for i in range(4):
+        store.attach_label(f"req-{i}", 1)
+    for i in range(5, 10):
+        store.attach_label(f"req-{i}", 1)
+
+    assert store.windows_awaiting_performance() == [1]
+
+
+def test_store_refuses_a_different_window_size(tmp_path: Path) -> None:
+    Store(tmp_path / "db.sqlite", window_size=5)
+
+    with pytest.raises(ConfigError, match="window_size 5"):
+        Store(tmp_path / "db.sqlite", window_size=10)
+
+
+def test_concurrent_first_start_migrates_once(tmp_path: Path) -> None:
+    path = tmp_path / "db.sqlite"
+    errors: list[BaseException] = []
+
+    def open_store() -> None:
+        try:
+            Store(path, window_size=5)
+        except BaseException as exc:
+            errors.append(exc)
+
+    threads = [threading.Thread(target=open_store) for _ in range(4)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert errors == []
+    with sqlite3.connect(path) as connection:
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 2
