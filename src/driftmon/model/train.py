@@ -55,6 +55,7 @@ class TrainResult:
     model: Pipeline
     baseline_model: Pipeline
     metrics: dict[str, dict[str, dict[str, float]]]
+    xgb_params: dict[str, Any]
 
 
 def to_labels(df: pd.DataFrame) -> "np.ndarray[Any, np.dtype[np.int_]]":
@@ -139,7 +140,7 @@ def train_models(
         "logistic_regression": {"validation": evaluate(lr, validation_df).as_dict()},
         "xgboost": {"validation": evaluate(xgb_pipeline, validation_df).as_dict()},
     }
-    return TrainResult(model=xgb_pipeline, baseline_model=lr, metrics=metrics)
+    return TrainResult(model=xgb_pipeline, baseline_model=lr, metrics=metrics, xgb_params=params)
 
 
 def write_baseline_report(
@@ -147,8 +148,6 @@ def write_baseline_report(
     metrics: dict[str, dict[str, dict[str, float]]],
     metadata: dict[str, Any],
 ) -> None:
-    """Write reports/baseline.md; every number comes from the metrics just
-    computed, nothing is entered by hand."""
     lines = [
         "# Baseline models",
         "",

@@ -47,21 +47,28 @@ class HttpClient:
         payload = None if body is None else json.dumps(body).encode("utf-8")
         headers = {"Content-Type": "application/json"} if payload is not None else {}
         try:
-            self._connection.request(method, path, body=payload, headers=headers)
-            response = self._connection.getresponse()
-            data = response.read()
+            response, data = self._send(method, path, payload, headers)
         except (OSError, http.client.HTTPException):
-            # A dropped keep-alive connection is retried once on a fresh one.
+            # Only a GET is safe to resend blindly. A POST that failed after
+            # it went out may already have stored a prediction, and sending it
+            # again would store it twice.
+            if method != "GET":
+                raise
             self._connection.close()
             self._connection = http.client.HTTPConnection(
                 self._host, self._port, timeout=self._timeout
             )
-            self._connection.request(method, path, body=payload, headers=headers)
-            response = self._connection.getresponse()
-            data = response.read()
+            response, data = self._send(method, path, payload, headers)
         if response.status >= 400:
             raise ApiError(f"{method} {path} failed with {response.status}: {data[:300]!r}")
         return json.loads(data)
+
+    def _send(
+        self, method: str, path: str, payload: bytes | None, headers: dict[str, str]
+    ) -> tuple[http.client.HTTPResponse, bytes]:
+        self._connection.request(method, path, body=payload, headers=headers)
+        response = self._connection.getresponse()
+        return response, response.read()
 
     def predict(self, features: dict[str, Any]) -> str:
         return str(self._request("POST", "/predict", features)["request_id"])
@@ -132,15 +139,20 @@ def replay_windows(client: ApiClient, windows: Iterable[Window]) -> int:
     return sent
 
 
-def wait_for_monitor(
-    client: ApiClient, window_size: int, timeout: float, poll: float = 0.5
-) -> bool:
-    """With a separate monitor worker, alerts land asynchronously; wait until
-    every complete window has been processed."""
+def monitor_caught_up(health: dict[str, Any]) -> bool:
+    complete = int(health["predictions"]) // int(health["window_size"])
+    windows_done = int(health["processed_windows"]) >= complete
+    labels_done = int(health["performance_checked_windows"]) >= int(health["labelled_windows"])
+    return windows_done and labels_done
+
+
+def wait_for_monitor(client: ApiClient, timeout: float, poll: float = 0.5) -> bool:
+    """With a separate monitor worker, alerts land asynchronously: wait until
+    every complete window has been processed and every fully labelled window
+    has been through the performance check."""
     deadline = time.monotonic() + timeout
     while True:
-        health = client.health()
-        if int(health["processed_windows"]) >= int(health["predictions"]) // window_size:
+        if monitor_caught_up(client.health()):
             return True
         if time.monotonic() >= deadline:
             logger.warning("monitor did not catch up within %.0f s", timeout)

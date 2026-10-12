@@ -5,10 +5,10 @@ import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal
 
 import pandas as pd
-from fastapi import FastAPI, HTTPException, Response
+from fastapi import FastAPI, HTTPException, Query, Response
 from opentelemetry import trace
 
 from driftmon.config import Settings, load_thresholds
@@ -35,6 +35,8 @@ from driftmon.service.schemas import (
 from driftmon.service.store import SqliteAlertSink, Store
 
 logger = logging.getLogger(__name__)
+
+MAX_ALERTS = 10_000
 
 
 @dataclass
@@ -109,15 +111,16 @@ def create_app(state: ServiceState, tracer: trace.Tracer | None = None) -> FastA
     @app.post("/labels", response_model=LabelResponse)
     def labels(request: LabelRequest) -> LabelResponse:
         attached = state.store.attach_label(request.request_id, request.label)
-        if not attached:
+        if attached is None:
             raise HTTPException(
                 status_code=404,
                 detail=f"no prediction with request_id {request.request_id!r}",
             )
-        state.metrics.observe_label()
-        if state.inline_monitoring:
-            state.runner.process_labelled_windows()
-        return LabelResponse(request_id=request.request_id, attached=True)
+        if attached:
+            state.metrics.observe_label()
+            if state.inline_monitoring:
+                state.runner.process_labelled_windows()
+        return LabelResponse(request_id=request.request_id, attached=attached)
 
     @app.get("/metrics")
     def metrics() -> Response:
@@ -129,12 +132,15 @@ def create_app(state: ServiceState, tracer: trace.Tracer | None = None) -> FastA
         return HealthResponse(
             status="ok",
             model_fingerprint=fingerprint(state.artifact.metadata),
+            window_size=state.store.window_size,
             predictions=state.store.prediction_count(),
             processed_windows=state.store.processed_window_count(),
+            labelled_windows=state.store.fully_labelled_count(),
+            performance_checked_windows=state.store.performance_checked_count(),
         )
 
     @app.get("/alerts", response_model=list[AlertRecord])
-    def alerts(limit: int = 100) -> list[AlertRecord]:
+    def alerts(limit: Annotated[int, Query(ge=1, le=MAX_ALERTS)] = 100) -> list[AlertRecord]:
         return [AlertRecord(**record) for record in state.store.list_alerts(limit)]
 
     return app

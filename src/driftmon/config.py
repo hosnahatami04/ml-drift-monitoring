@@ -105,6 +105,39 @@ class CalibrationGrid(BaseModel):
     max_stream_false_alarm_rate: float = 0.10
 
 
+class KpiTarget(BaseModel):
+    target: float | None = None
+    comparator: Literal[">=", "<=", "report"] = "report"
+
+
+def _default_kpi_targets() -> dict[str, KpiTarget]:
+    targets = {
+        "detection_rate.sudden_covariate": (0.95, ">="),
+        "detection_rate.gradual_covariate": (0.90, ">="),
+        "detection_rate.concept": (0.80, ">="),
+        "median_ttd.sudden_covariate": (1, "<="),
+        "median_ttd.gradual_covariate": (6, "<="),
+        "median_ttd.concept": (7, "<="),
+        "false_alarm.stream": (0.10, "<="),
+        "false_alarm.per_window": (0.002, "<="),
+        "alert_precision": (0.90, ">="),
+        "lead_time.harmful_covariate": (1, ">="),
+        "detector_correctness": (1e-6, "<="),
+    }
+    return {
+        k: KpiTarget.model_validate({"target": t, "comparator": c}) for k, (t, c) in targets.items()
+    }
+
+
+class GateTolerances(BaseModel):
+    """Allowed regression of the smoke KPIs in CI. Shares move in
+    percentage points; the per-window false alarm rate lives on a scale two
+    orders of magnitude smaller and gets its own bound."""
+
+    share: float = 0.05
+    per_window_false_alarm: float = 0.002
+
+
 class EvaluationConfig(BaseModel):
     n_workers: int = 4
     bootstrap_samples: int = 1000
@@ -112,13 +145,14 @@ class EvaluationConfig(BaseModel):
     degradation_margin: float = 0.03
     target_severity: str = "medium"
     correctness_cases: int = 300
-    # Ablation over window size keeps the traffic volume fixed: drift start,
-    # horizon, label delay and scenario timing are scaled from rows, not
-    # windows, so every arm watches the same 60k-row stream.
+    # Window-size arms keep the traffic volume fixed: stream timing is scaled
+    # in rows, not windows, so every arm watches the same number of rows.
     ablation_window_sizes: list[int] = [250, 500, 1000, 2000]
     ablation_severity: str = "medium"
     smoke_seed_count: int = 5
     smoke_severities: list[str] = ["medium"]
+    kpi_targets: dict[str, KpiTarget] = Field(default_factory=_default_kpi_targets)
+    gate_tolerance: GateTolerances = GateTolerances()
     calibration: CalibrationGrid = CalibrationGrid()
 
 

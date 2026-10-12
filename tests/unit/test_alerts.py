@@ -128,3 +128,39 @@ def test_webhook_failure_is_logged_not_raised(
 
     assert len(alerts) == 1
     assert any("webhook" in record.message for record in caplog.records)
+
+
+class _BrokenSink:
+    def emit(self, alert: object) -> None:
+        raise RuntimeError("sink is down")
+
+
+class _RecordingSink:
+    def __init__(self) -> None:
+        self.received: list[object] = []
+
+    def emit(self, alert: object) -> None:
+        self.received.append(alert)
+
+
+def test_a_failing_sink_does_not_stop_the_others(caplog: pytest.LogCaptureFixture) -> None:
+    recorder = _RecordingSink()
+    manager = AlertManager(AlertSettings(), sinks=[_BrokenSink(), recorder])
+
+    with caplog.at_level(logging.ERROR):
+        alerts = manager.evaluate_window(_report(0))
+
+    assert len(alerts) == 1
+    assert recorder.received == alerts
+    assert "sink is down" in caplog.text
+
+
+def test_webhook_with_a_malformed_url_is_logged_not_raised(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    manager = AlertManager(AlertSettings(), sinks=[WebhookSink("not a url")])
+
+    with caplog.at_level(logging.WARNING):
+        manager.evaluate_window(_report(0))
+
+    assert "webhook delivery failed" in caplog.text

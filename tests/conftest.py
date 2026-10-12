@@ -31,6 +31,8 @@ def tiny_artifact() -> ModelArtifact:
         metrics=result.metrics,
         n_duplicates_removed=0,
         split_sizes={"train": len(train_df), "validation": len(validation_df)},
+        split_fractions={"train": 0.5},
+        model_params=result.xgb_params,
     )
     return ModelArtifact(
         model=result.model,

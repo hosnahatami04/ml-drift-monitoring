@@ -1,13 +1,9 @@
 """Deterministic, parallel evaluation harness.
 
-Streams run in-process through the same Monitor the service uses. A worker
-does the threshold-independent half of Monitor.process_window (the detector
-statistics) plus error rates and rolling AUC; alerting then replays those
-through Monitor.decide and the AlertManager in the order the live runner
-uses. Threshold sweeps and ablations reuse one detector pass per stream.
-
-Every stream is seeded by its own (seed, window) generators, so worker count
-and scheduling never change a result.
+Workers run the expensive, threshold-independent half of the monitor once per
+stream; alerting is replayed from those statistics, so a threshold sweep or an
+ablation costs a replay, not a new detector pass. Each (seed, window) has its
+own generator, so worker count and scheduling never change a result.
 """
 
 import copy
@@ -15,7 +11,8 @@ import logging
 import math
 import multiprocessing
 from collections.abc import Iterable, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -95,11 +92,15 @@ class StreamRecord:
         return results
 
 
-def prepare_inputs(settings: Settings) -> tuple[HarnessInputs, ModelArtifact]:
+def prepare_inputs(
+    settings: Settings, artifact_dir: Path | None = None
+) -> tuple[HarnessInputs, ModelArtifact]:
     processed = settings.processed_data_dir
     pool = split.load_split(processed, "stream_pool")
     reference_df = split.load_split(processed, "reference")
-    artifact = artifacts.load_artifact(artifacts.latest_artifact_dir(settings.artifacts_dir))
+    artifact = artifacts.load_artifact(
+        artifact_dir or artifacts.latest_artifact_dir(settings.artifacts_dir)
+    )
     model = copy.deepcopy(artifact.model)
     # Parallelism comes from the stream workers; a multi-threaded booster in
     # each of them would only oversubscribe the cores. Per-row predictions do
@@ -131,28 +132,64 @@ def build_tasks(
     return tasks
 
 
+def _scale(windows: int, factor: float, minimum: int = 1) -> int:
+    # Half-up, not Python's half-to-even: 1.5 windows becomes 2 like 2.5
+    # becomes 3, so rounding never depends on parity.
+    return max(minimum, math.floor(windows * factor + 0.5))
+
+
 def scaled_task_params(
     base: StreamParams, horizon: int, window_size: int
 ) -> tuple[StreamParams, int, float]:
     """Stream timing for another window size at constant traffic volume.
-    Label delay rounds up so labels never arrive earlier than in the base."""
+    Quantities that do not divide evenly are rounded and reported as such."""
     factor = base.window_size / window_size
     params = StreamParams(
-        n_windows=round(base.n_windows * factor),
+        n_windows=_scale(base.n_windows, factor),
         window_size=window_size,
-        drift_start=round(base.drift_start * factor),
-        label_delay=math.ceil(base.label_delay * factor),
+        drift_start=_scale(base.drift_start, factor),
+        label_delay=_scale(base.label_delay, factor),
     )
-    return params, round(horizon * factor), factor
+    return params, _scale(horizon, factor), factor
 
 
 def scaled_scenario(scenario: ScenarioConfig, factor: float) -> ScenarioConfig:
     update: dict[str, int] = {}
     if scenario.ramp_windows is not None:
-        update["ramp_windows"] = max(1, round(scenario.ramp_windows * factor))
+        update["ramp_windows"] = _scale(scenario.ramp_windows, factor)
     if scenario.period is not None:
-        update["period"] = max(2, round(scenario.period * factor))
+        update["period"] = _scale(scenario.period, factor, minimum=2)
     return scenario.model_copy(update=update)
+
+
+def scaled_thresholds(thresholds: ThresholdsConfig, factor: float) -> ThresholdsConfig:
+    """The alert cooldown is a span of traffic too, so it scales with the
+    window size; detector thresholds stay frozen."""
+    cooldown = _scale(thresholds.alerts.cooldown_windows, factor, minimum=0)
+    alerts = thresholds.alerts.model_copy(update={"cooldown_windows": cooldown})
+    return thresholds.model_copy(update={"alerts": alerts})
+
+
+def stream_timing(
+    params: StreamParams,
+    horizon: int,
+    thresholds: ThresholdsConfig,
+    scenarios: dict[str, ScenarioConfig],
+) -> dict[str, int]:
+    timing = {
+        "window_size": params.window_size,
+        "n_windows": params.n_windows,
+        "drift_start": params.drift_start,
+        "label_delay": params.label_delay,
+        "horizon": horizon,
+        "cooldown_windows": thresholds.alerts.cooldown_windows,
+    }
+    for scenario in scenarios.values():
+        if scenario.ramp_windows is not None:
+            timing["ramp_windows"] = scenario.ramp_windows
+        if scenario.period is not None:
+            timing["seasonal_period"] = scenario.period
+    return timing
 
 
 def _rolling_auc(labels: np.ndarray, probabilities: FloatArray) -> float:
@@ -345,6 +382,7 @@ class AblationArm:
     view: str
     window_size: int
     outcomes: list[StreamOutcome]
+    timing: dict[str, int] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -447,12 +485,13 @@ def run_evaluation(
             decision_ablations(in_scope, inputs.reference, thresholds, margin, params.window_size)
         )
         for window_size in evaluation.ablation_window_sizes:
+            arm_params, arm_horizon, factor = scaled_task_params(params, horizon, window_size)
+            arm_scenarios = {n: scaled_scenario(s, factor) for n, s in scenarios.items()}
+            arm_thresholds = scaled_thresholds(thresholds, factor)
             if window_size == params.window_size:
                 arm_records = in_scope
             else:
-                arm_params, arm_horizon, factor = scaled_task_params(params, horizon, window_size)
-                scaled = {n: scaled_scenario(s, factor) for n, s in scenarios.items()}
-                arm_tasks = build_tasks(scaled, [level], seeds, arm_params, arm_horizon)
+                arm_tasks = build_tasks(arm_scenarios, [level], seeds, arm_params, arm_horizon)
                 logger.info("window-size ablation n=%d: %d streams", window_size, len(arm_tasks))
                 arm_records = run_streams(arm_tasks, inputs, n_workers)
             ablations.append(
@@ -461,7 +500,8 @@ def run_evaluation(
                     f"n={window_size}",
                     "all alerts",
                     window_size,
-                    outcomes_for(arm_records, inputs.reference, thresholds, margin),
+                    outcomes_for(arm_records, inputs.reference, arm_thresholds, margin),
+                    stream_timing(arm_params, arm_horizon, arm_thresholds, arm_scenarios),
                 )
             )
 
@@ -498,7 +538,8 @@ def detector_correctness(seed: int, n_cases: int) -> dict[str, float]:
             cur = rng.integers(0, 12, n_cur).astype(float)
         mine = ks_test(ref, cur, "x")
         theirs = ks_2samp(ref, cur, method="asymp")
-        assert mine.p_value is not None
+        if mine.p_value is None:
+            raise RuntimeError("KS returned no p-value")
         worst["ks_statistic"] = max(worst["ks_statistic"], abs(mine.statistic - theirs.statistic))
         worst["ks_p_value"] = max(worst["ks_p_value"], abs(mine.p_value - theirs.pvalue))
 

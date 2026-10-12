@@ -25,8 +25,8 @@ def window_rng(seed: int, window_index: int, substream: str) -> np.random.Genera
 
 
 def sample_uniform(rng: np.random.Generator, pool_size: int, n: int) -> IntArray:
-    """Sampling is with replacement: the pool (~14.6k rows) is reused across
-    60 windows of 1000 rows, so windows cannot be disjoint anyway."""
+    """With replacement: a stream draws more rows than the pool holds, so
+    windows could not be disjoint anyway."""
     return rng.integers(0, pool_size, size=n, dtype=np.int64)
 
 

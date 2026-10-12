@@ -3,7 +3,6 @@ arrival order. Pure functions; the store provides the sequence numbers."""
 
 
 def window_id_for(sequence: int, window_size: int) -> int:
-    """Window of the `sequence`-th prediction (1-based sequence)."""
     if sequence < 1:
         raise ValueError("sequence numbers start at 1")
     if window_size < 1:

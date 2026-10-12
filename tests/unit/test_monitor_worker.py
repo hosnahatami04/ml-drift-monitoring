@@ -8,7 +8,7 @@ from typer.testing import CliRunner
 
 from driftmon.cli import app
 from driftmon.model.artifacts import ModelArtifact, save_artifact
-from driftmon.monitoring.runner import poll
+from driftmon.monitoring.runner import MonitorRunner, poll
 from driftmon.service.api import build_state, create_app
 from driftmon.service.client import InProcessClient, replay_windows
 from driftmon.simulation import sampler
@@ -134,3 +134,89 @@ def test_poll_runs_until_stopped(tiny_artifact: ModelArtifact, tmp_path: Path) -
     poll(worker.runner, 0.01, stop)
 
     assert len(passes) == 3
+
+
+def test_a_failing_window_is_logged_and_retried_without_overtaking(
+    tiny_artifact: ModelArtifact, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    settings = settings_for(tmp_path, inline=False)
+    api = build_state(settings, artifact=tiny_artifact)
+    replay_windows(InProcessClient(TestClient(create_app(api))), stream())
+    worker = build_state(settings, artifact=tiny_artifact, role="monitor")
+    real = worker.runner.monitor.process_window
+    calls: list[int] = []
+
+    def fail_first(window_id, features, probabilities):  # type: ignore[no-untyped-def]
+        calls.append(window_id)
+        if len(calls) == 1:
+            raise RuntimeError("transient failure")
+        return real(window_id, features, probabilities)
+
+    worker.runner.monitor.process_window = fail_first  # type: ignore[method-assign]
+
+    with caplog.at_level("ERROR"):
+        first, _ = worker.runner.run_once()
+    second, _ = worker.runner.run_once()
+
+    assert first == []
+    assert "processing window 0 failed" in caplog.text
+    assert [r.window_id for r in second] == list(range(PARAMS.n_windows))
+
+
+def test_poll_survives_a_failing_tick(tiny_artifact: ModelArtifact, tmp_path: Path) -> None:
+    worker = build_state(
+        settings_for(tmp_path, inline=False), artifact=tiny_artifact, role="monitor"
+    )
+    stop = threading.Event()
+    ticks: list[int] = []
+
+    def flaky_run_once():  # type: ignore[no-untyped-def]
+        ticks.append(1)
+        if len(ticks) == 1:
+            raise RuntimeError("store locked")
+        stop.set()
+        return [], []
+
+    worker.runner.run_once = flaky_run_once  # type: ignore[method-assign]
+
+    poll(worker.runner, 0.01, stop)
+
+    assert len(ticks) == 2
+
+
+def test_inline_service_restores_monitor_state_on_start(
+    tiny_artifact: ModelArtifact, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = settings_for(tmp_path, inline=True)
+    live = build_state(settings, artifact=tiny_artifact)
+    replay_windows(InProcessClient(TestClient(create_app(live))), stream())
+    save_artifact(tiny_artifact, tmp_path / "artifacts")
+    config = tmp_path / "serve.yaml"
+    config.write_text(
+        yaml.safe_dump(
+            {
+                "artifacts_dir": str(tmp_path / "artifacts"),
+                "db_path": str(settings.db_path),
+                "window_size": PARAMS.window_size,
+                "thresholds_path": str(REPO_ROOT / "configs" / "thresholds.yaml"),
+            }
+        ),
+        encoding="utf-8",
+    )
+    started: list[object] = []
+    monkeypatch.setattr("uvicorn.run", lambda app, host, port: started.append(app))
+    monkeypatch.setattr("driftmon.observability.tracing.setup_tracing", lambda config, name: None)
+    restored: list[float] = []
+    real_restore = MonitorRunner.restore_state
+
+    def spy(self):  # type: ignore[no-untyped-def]
+        real_restore(self)
+        restored.append(self.monitor.page_hinkley.score)
+
+    monkeypatch.setattr(MonitorRunner, "restore_state", spy)
+
+    result = CliRunner().invoke(app, ["serve", "--config", str(config)])
+
+    assert result.exit_code == 0, result.output
+    assert started
+    assert restored == [pytest.approx(live.runner.monitor.page_hinkley.score)]

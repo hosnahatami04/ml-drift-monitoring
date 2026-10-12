@@ -102,6 +102,23 @@ def test_label_attaches_to_prediction(client: TestClient) -> None:
     assert response.json()["attached"] is True
 
 
+def test_repeated_label_is_ignored(client: TestClient) -> None:
+    request_id = client.post("/predict", json=_payload()).json()["request_id"]
+    client.post("/labels", json={"request_id": request_id, "label": 1})
+
+    repeat = client.post("/labels", json={"request_id": request_id, "label": 0})
+
+    assert repeat.status_code == 200
+    assert repeat.json()["attached"] is False
+    metrics = client.get("/metrics").text
+    assert "driftmon_labels_total 1.0" in metrics
+
+
+@pytest.mark.parametrize("limit", [0, -1, 10_001])
+def test_alert_listing_limit_is_bounded(client: TestClient, limit: int) -> None:
+    assert client.get("/alerts", params={"limit": limit}).status_code == 422
+
+
 def test_health_reports_counts(client: TestClient) -> None:
     client.post("/predict", json=_payload())
 
@@ -109,6 +126,10 @@ def test_health_reports_counts(client: TestClient) -> None:
 
     assert body["status"] == "ok"
     assert body["predictions"] == 1
+    assert body["window_size"] == WINDOW_SIZE
+    assert body["processed_windows"] == 0
+    assert body["labelled_windows"] == 0
+    assert body["performance_checked_windows"] == 0
     assert len(body["model_fingerprint"]) == 12
 
 
