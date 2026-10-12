@@ -3,7 +3,7 @@ export PYTHONHASHSEED = 0
 .PHONY: setup lint format typecheck test cov data train calibrate evaluate evaluate-smoke reproduce
 
 setup:
-	uv sync --extra dev
+	uv sync --extra dev --extra dashboard
 
 data:
 	uv run driftmon download-data

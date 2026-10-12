@@ -223,6 +223,22 @@ class Store:
                 (error_rate, window_id),
             )
 
+    def checked_error_rates(self) -> list[float]:
+        """Error rates already fed to the performance detector, in window
+        order: replaying them rebuilds its state after a restart."""
+        with self._session() as connection:
+            rows = connection.execute(
+                "SELECT error_rate FROM windows WHERE performance_checked = 1 ORDER BY window_id"
+            ).fetchall()
+        return [float(row[0]) for row in rows]
+
+    def last_alert_windows(self) -> dict[str, int]:
+        with self._session() as connection:
+            rows = connection.execute(
+                "SELECT type, MAX(window_id) FROM alerts GROUP BY type"
+            ).fetchall()
+        return {str(row[0]): int(row[1]) for row in rows}
+
     def insert_alert(self, alert: Alert) -> None:
         with self._session() as connection:
             connection.execute(
