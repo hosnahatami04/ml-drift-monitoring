@@ -9,7 +9,7 @@ env:
   PYTHONHASHSEED: "0"
 
 jobs:
-  checks:
+  lint:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -17,13 +17,91 @@ jobs:
         with:
           python-version: "3.11"
           enable-cache: true
-      - name: Install dependencies
-        run: make setup
-      - name: Lint
-        run: make lint
-      - name: Typecheck
-        run: make typecheck
-      - name: Test
-        run: make test
+      - run: make setup
+      - run: make lint
+
+  typecheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.11"
+          enable-cache: true
+      - run: make setup
+      - run: make typecheck
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.11"
+          enable-cache: true
+      - run: make setup
+      - name: Tests with coverage gate
+        run: make cov
       - name: Validate compose file
         run: docker compose config --quiet
+
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.11"
+          enable-cache: true
+      - run: make setup
+      - name: Cache raw dataset
+        uses: actions/cache@v4
+        with:
+          path: data/raw
+          key: adult-raw-${{ hashFiles('configs/default.yaml') }}
+      - name: Data and model
+        run: make data train
+      - name: Quality gates on the real dataset
+        run: uv run pytest -m data
+      - name: Smoke evaluation
+        run: make evaluate-smoke
+      - name: KPI regression gate
+        run: make kpi-gate
+      - uses: actions/upload-artifact@v4
+        with:
+          name: model-artifact
+          path: artifacts/model-*
+          retention-days: 3
+
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.11"
+      - name: Audit locked dependencies
+        run: make audit
+
+  image:
+    runs-on: ubuntu-latest
+    needs: smoke
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: model-artifact
+          path: artifacts
+      - name: Build image
+        run: docker build -t driftmon:ci .
+      - name: Healthcheck passes with a real artifact
+        run: |
+          docker run -d --name api -v "$PWD/artifacts:/app/artifacts:ro" driftmon:ci
+          for _ in $(seq 1 30); do
+            status=$(docker inspect --format '{{.State.Health.Status}}' api)
+            echo "health: $status"
+            if [ "$status" = "healthy" ]; then exit 0; fi
+            sleep 4
+          done
+          docker logs api
+          exit 1

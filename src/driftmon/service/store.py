@@ -149,13 +149,6 @@ class Store:
             )
             return True
 
-    def window_row_count(self, window_id: int) -> int:
-        with self._session() as connection:
-            row = connection.execute(
-                "SELECT COUNT(*) FROM predictions WHERE window_id = ?", (window_id,)
-            ).fetchone()
-            return int(row[0])
-
     def window_predictions(self, window_id: int) -> list[StoredPrediction]:
         with self._session() as connection:
             rows = connection.execute(

@@ -1,7 +1,7 @@
 """Quality gates that need the real dataset and a trained artifact.
 
-These run after `make data train` on a developer machine and are skipped in CI
-where the dataset is not downloaded.
+They run after `make data train`, locally or in the CI smoke job, and are
+skipped wherever the dataset has not been downloaded.
 """
 
 from pathlib import Path

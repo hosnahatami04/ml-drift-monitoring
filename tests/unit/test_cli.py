@@ -1,6 +1,8 @@
 import re
 from importlib.metadata import version
+from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 from driftmon.cli import app
@@ -35,3 +37,20 @@ def test_no_arguments_shows_help() -> None:
 
     assert "driftmon" in output
     assert "--version" in output
+
+
+def test_console_entry_turns_operator_errors_into_one_line(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A process-wide tracer provider would leak into every later test.
+    monkeypatch.setattr("driftmon.observability.tracing.setup_tracing", lambda config, name: None)
+    config = tmp_path / "config.yaml"
+    config.write_text(f"artifacts_dir: {tmp_path / 'none'}\n", encoding="utf-8")
+
+    with pytest.raises(SystemExit) as exit_info:
+        app(["serve", "--config", str(config)], prog_name="driftmon")
+
+    assert exit_info.value.code == 1
+    err = capsys.readouterr().err
+    assert err.startswith("error: no model artifact found")
+    assert "Traceback" not in err

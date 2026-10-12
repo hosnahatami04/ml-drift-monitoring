@@ -2,14 +2,28 @@
 
 from importlib.metadata import version
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 
 import typer
 
-from driftmon.config import DEFAULT_CONFIG_PATH, Settings, load_settings
+from driftmon.config import DEFAULT_CONFIG_PATH, ConfigError, Settings, load_settings
 from driftmon.logging import setup_logging
 
-app = typer.Typer(
+
+class _Cli(typer.Typer):
+    """Operator mistakes (no data yet, no trained model, a bad config) end
+    in one readable line on the console instead of a traceback. Tests drive
+    the commands through Click directly and still see the exception."""
+
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:
+        try:
+            return super().__call__(*args, **kwargs)
+        except (FileNotFoundError, ConfigError) as exc:
+            typer.echo(f"error: {exc}", err=True)
+            raise SystemExit(1) from None
+
+
+app = _Cli(
     name="driftmon",
     help="Drift detection and observability for production ML.",
     add_completion=False,
@@ -285,8 +299,17 @@ def evaluate(
     run = harness.run_evaluation(
         settings, inputs, scenarios, thresholds, smoke=smoke, n_workers=n_workers
     )
+    # Only settings that can change a result belong in the hash; serving and
+    # telemetry options must not make an identical evaluation look different.
     hashed_settings = settings.model_dump(
-        mode="json", exclude={"log_level": True, "evaluation": {"n_workers"}}
+        mode="json",
+        exclude={
+            "log_level": True,
+            "db_path": True,
+            "service": True,
+            "telemetry": True,
+            "evaluation": {"n_workers"},
+        },
     )
     provenance = {
         "artifact": artifact_dir.name,
@@ -364,7 +387,16 @@ def replay(
     if url is not None:
         client = api_client.HttpClient(url)
     else:
-        from fastapi.testclient import TestClient
+        try:
+            from fastapi.testclient import TestClient
+        except ImportError as exc:
+            # The test client needs httpx, a dev dependency the container
+            # image leaves out; replaying against a running service does not.
+            raise typer.BadParameter(
+                "in-process replay needs the dev extra (httpx); "
+                "pass --url to replay against a running service",
+                param_hint="--url",
+            ) from exc
 
         from driftmon.service.api import build_state, create_app
 
@@ -422,8 +454,10 @@ def serve(
     from driftmon.service.api import build_state, create_app
 
     settings = _load(config)
+    # Build first: a missing model should fail before any global state is set.
+    state = build_state(settings)
     setup_tracing(settings.telemetry, "driftmon-api")
-    uvicorn.run(create_app(build_state(settings)), host=host, port=port)
+    uvicorn.run(create_app(state), host=host, port=port)
 
 
 @app.command()
@@ -456,3 +490,64 @@ def monitor(
     signal.signal(signal.SIGINT, lambda *_: stop.set())
     poll(state.runner, settings.service.monitor_interval_seconds, stop)
     state.store.close()
+
+
+@app.command()
+def dashboard(
+    port: Annotated[int, typer.Option(help="Port.")] = 8501,
+    host: Annotated[str, typer.Option(help="Bind address.")] = "127.0.0.1",
+) -> None:
+    """Run the Streamlit dashboard (needs the dashboard extra)."""
+    import os
+    import sys
+
+    from driftmon.dashboard import data
+
+    # The app file ships inside the installed package, so this works the same
+    # from a checkout and from the container image.
+    app_path = Path(data.__file__).with_name("app.py")
+    args = [
+        sys.executable,
+        "-m",
+        "streamlit",
+        "run",
+        str(app_path),
+        f"--server.port={port}",
+        f"--server.address={host}",
+        "--server.headless=true",
+        "--browser.gatherUsageStats=false",
+    ]
+    os.execv(sys.executable, args)
+
+
+@app.command("kpi-gate")
+def kpi_gate(
+    results: Annotated[Path, typer.Option(help="Smoke results.json to check.")] = Path(
+        "artifacts/smoke/results.json"
+    ),
+    baseline: Annotated[Path, typer.Option(help="Stored baseline.")] = Path(
+        "tests/fixtures/kpi_smoke.json"
+    ),
+    update: Annotated[
+        bool, typer.Option(help="Write the baseline from these results instead of checking.")
+    ] = False,
+) -> None:
+    """Fail when smoke KPIs regress against the stored baseline."""
+    import json
+
+    from driftmon.evaluation import gate
+    from driftmon.evaluation.report import validate_results
+
+    if not results.is_file():
+        raise typer.BadParameter(f"{results} not found; run `make evaluate-smoke` first")
+    document = validate_results(json.loads(results.read_text(encoding="utf-8")))
+    if update:
+        gate.write_baseline(baseline, gate.baseline_from(document))
+        typer.echo(f"baseline written: {baseline}")
+        return
+    violations = gate.check(document, gate.load_baseline(baseline))
+    for violation in violations:
+        typer.echo(f"KPI regression: {violation}", err=True)
+    if violations:
+        raise typer.Exit(code=1)
+    typer.echo("KPI gate passed")
