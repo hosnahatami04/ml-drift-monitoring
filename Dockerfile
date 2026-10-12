@@ -35,6 +35,9 @@ RUN useradd --create-home --uid 10001 app \
     && mkdir -p /app/state \
     && chown app:app /app/state
 WORKDIR /app
+# The only directory the non-root user can write to; the settings default
+# (data/driftmon.db) would point into the root-owned /app.
+ENV DRIFTMON_DB_PATH=/app/state/driftmon.db
 COPY --from=builder /opt/venv /opt/venv
 COPY configs ./configs
 USER app
