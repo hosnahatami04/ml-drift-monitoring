@@ -119,3 +119,15 @@ def test_error_rate_and_page_hinkley_flow(monitor: Monitor) -> None:
 
     monitor.reset_performance()
     assert monitor.page_hinkley.score == 0.0
+
+
+def test_page_hinkley_restarts_after_an_alarm(monitor: Monitor) -> None:
+    for _ in range(20):
+        monitor.observe_error_rate(0.1)
+    alarms = [monitor.observe_error_rate(0.6) for _ in range(10)]
+
+    first = alarms.index(True)
+    # Without the restart the statistic would stay above lambda and the next
+    # window would alarm again; after it the detector starts from scratch.
+    assert alarms[first + 1] is False
+    assert monitor.page_hinkley.score <= monitor.page_hinkley.lambda_

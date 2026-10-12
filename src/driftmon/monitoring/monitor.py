@@ -1,10 +1,7 @@
-"""The shared monitoring core.
+"""The monitoring core shared by the live runner and the evaluation harness.
 
-One Monitor instance watches one model: it holds the reference statistics and
-frozen thresholds, runs every detector on a window of features plus predicted
-probabilities, and tracks the error-rate stream once labels arrive. No IO
-here - the live runner and the evaluation harness both import this class, so
-evaluation measures exactly the code that runs in production.
+It does no IO, so the harness can score the same detectors and decision rule
+the service runs.
 """
 
 from collections import Counter
@@ -86,7 +83,6 @@ class Monitor:
         features: pd.DataFrame,
         probabilities: FloatArray,
     ) -> WindowReport:
-        """Run every input-side detector on one complete window."""
         results = self.run_tests(features, probabilities)
         return self.decide(window_id, len(features), results)
 
@@ -141,9 +137,14 @@ class Monitor:
         )
 
     def observe_error_rate(self, error_rate: float) -> bool:
-        """Feed one window's realized error rate to Page-Hinkley. Called only
-        once that window's labels have fully arrived, in window order."""
-        return self.page_hinkley.update(error_rate)
+        """Feed one fully labelled window's error rate to Page-Hinkley, in
+        window order. The detector restarts after an alarm: otherwise its
+        statistic stays above the threshold and one change keeps firing
+        after every cooldown (ADR 0010)."""
+        alarm = self.page_hinkley.update(error_rate)
+        if alarm:
+            self.page_hinkley.reset()
+        return alarm
 
     def reset_performance(self) -> None:
         self.page_hinkley.reset()
