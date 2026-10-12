@@ -25,8 +25,8 @@ Two filters, applied in order inside the window decision:
    stream-level false alarm rate. Benjamini-Hochberg is implemented alongside
    and reported in the ablation, since it trades strictness for sensitivity.
 2. An effect-size gate per method: KS D, PSI value, and Cramer's V must each
-   clear a minimum (initial values in `configs/thresholds.yaml`, calibrated
-   later). Significance says "this is not chance"; the gate says "and it is
+   clear a minimum (calibrated on held-out seeds and frozen in
+   `configs/thresholds.yaml`, ADR 0008). Significance says "this is not chance"; the gate says "and it is
    big enough to matter".
 
 A feature counts as flagged when any of its tests passes both filters; the

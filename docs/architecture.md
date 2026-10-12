@@ -3,9 +3,10 @@
 The system has two paths that share one monitoring core. The online path
 serves predictions, stores them, and watches them for drift. The offline path
 simulates drift with known ground truth and measures how well the same core
-catches it. Because the evaluation harness imports the code the service runs,
-the numbers in `reports/results.md` describe production behaviour, not a
-re-implementation of it.
+catches it. The harness uses the service's detectors, decision rule,
+Page-Hinkley detector and alert manager, and replays the runner's ordering of
+windows and delayed labels; a test checks that replay against the live path
+window by window.
 
 ```mermaid
 flowchart LR
@@ -58,9 +59,10 @@ flowchart LR
    chi-square on categorical features, KS on predicted probabilities), applies
    the Bonferroni correction and the effect-size gate (ADR 0004), and hands the
    report to the alert manager. Once a window's labels have all arrived, its
-   error rate goes to Page-Hinkley, which raises performance alerts. On restart
-   the worker rebuilds that state from the store (ADR 0009). In a single local
-   process the API can run the same steps inline instead.
+   error rate goes to Page-Hinkley, which raises a performance alert and then
+   starts over (ADR 0010). Every window is claimed in the store before it is
+   processed, and on restart the monitor rebuilds its state from the store
+   (ADR 0009). In a single local process the API runs the same steps inline.
 4. **Alerting and telemetry.** Alerts carry a type (`feature_drift`,
    `prediction_drift`, `performance_drift`), a severity, and a per-type
    cooldown. They go to SQLite and a JSONL file, and optionally to a webhook.
