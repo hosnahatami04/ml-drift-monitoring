@@ -81,6 +81,10 @@ class AlertManager:
         self.sinks = sinks or []
         self._last_fired: dict[str, int] = {}
 
+    def restore(self, last_fired: dict[str, int]) -> None:
+        """Resume cooldowns after a restart from the alerts already stored."""
+        self._last_fired = dict(last_fired)
+
     def _in_cooldown(self, alert_type: str, window_id: int) -> bool:
         last = self._last_fired.get(alert_type)
         return last is not None and window_id - last <= self.settings.cooldown_windows
