@@ -1,0 +1,17 @@
+{
+  "kpis": {
+    "detection_rate.concept": 1.0,
+    "detection_rate.gradual_covariate": 1.0,
+    "detection_rate.sudden_covariate": 1.0,
+    "false_alarm.per_window": 0.0,
+    "false_alarm.stream": 0.0
+  },
+  "seeds": [
+    100,
+    101,
+    102,
+    103,
+    104
+  ],
+  "tolerance": 0.05
+}
