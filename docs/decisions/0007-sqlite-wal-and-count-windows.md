@@ -4,7 +4,8 @@ Date: 2026-10-08
 
 ## Status
 
-Accepted
+Accepted. The decision to run the monitor inside the request is superseded by
+ADR 0009; storage and count-based windowing stand.
 
 ## Context
 
