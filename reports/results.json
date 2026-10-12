@@ -2158,7 +2158,7 @@
       18,
       19
     ],
-    "config_sha256": "35fb5ba33fa25535bf72237d7f1c352d85b923683e87fdc55b4ef739d64e1bda",
+    "config_sha256": "3ebcd2fda0bf48b6f1a0b29f1c0526ff058c6a0d698796d8a1c9702034907474",
     "degradation_margin": 0.03,
     "horizon": 20,
     "library_versions": {
