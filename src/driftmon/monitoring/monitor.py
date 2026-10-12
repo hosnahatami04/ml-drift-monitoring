@@ -16,7 +16,6 @@ import numpy as np
 import pandas as pd
 
 from driftmon.config import ThresholdsConfig
-from driftmon.data import schema
 from driftmon.detectors.base import FloatArray, TestResult
 from driftmon.detectors.chi2 import chi2_from_counts
 from driftmon.detectors.ks import ks_test, prediction_drift_test
@@ -157,6 +156,3 @@ class Monitor:
     ) -> float:
         predictions = (probabilities >= threshold).astype(np.int64)
         return float(np.mean(predictions != labels))
-
-    def expected_features(self) -> list[str]:
-        return list(schema.MODEL_FEATURES)
