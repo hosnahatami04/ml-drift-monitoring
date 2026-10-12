@@ -66,3 +66,16 @@ def test_prometheus_image_is_pinned_and_scrapes_both_processes(compose: dict[str
     }
     assert "8000" in published["api"]
     assert "9100" in published["monitor"]
+
+
+def test_image_runs_unprivileged_with_a_writable_store() -> None:
+    dockerfile = (REPO_ROOT / "Dockerfile").read_text(encoding="utf-8")
+    runtime = dockerfile.split("AS runtime", 1)[1]
+
+    assert "USER app" in runtime
+    assert "chown app:app /app/state" in runtime
+    # Without this the store would default into the root-owned /app and the
+    # API would crash as soon as it starts (the CI image job runs it bare).
+    assert "ENV DRIFTMON_DB_PATH=/app/state/driftmon.db" in runtime
+    assert "HEALTHCHECK" in runtime
+    assert "@sha256:" in dockerfile.splitlines()[2]
