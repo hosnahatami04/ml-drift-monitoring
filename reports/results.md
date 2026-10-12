@@ -5,7 +5,7 @@ Written by `driftmon evaluate` from `results.json` in the same directory; every 
 - Evaluation seeds 100-129 (30 streams per cell), severities: low, medium, high
 - Stream: 60 windows of 1000 rows, drift from window 20, label delay 3, detection horizon 20
 - Thresholds frozen by calibration on seeds 0-19: alpha 0.001 (bonferroni), k=1, KS D ≥ 0.04, PSI ≥ 0.1, Cramér's V ≥ 0.1, Page-Hinkley delta 0.005 / lambda 0.05
-- Model artifact `model-e0787954c486` (model.pkl sha256 `e95949f30b43`), reference AUC 0.9272; config sha256 `35fb5ba33fa2`
+- Model artifact `model-e0787954c486` (model.pkl sha256 `e95949f30b43`), reference AUC 0.9272; config sha256 `3ebcd2fda0bf`
 - 95% intervals: percentile bootstrap over streams, 1000 resamples, seed 2026
 
 ## Detection KPIs
