@@ -2,13 +2,8 @@
 
 
 class PageHinkley:
-    """Detects an increase in the mean of a stream.
-
-    `delta` is the tolerated drift per step, `lambda_` the alarm threshold on
-    the cumulative deviation. Both are calibrated, not chosen by hand. The
-    detector is stateful on purpose: it watches one stream across windows and
-    only runs once true labels have arrived.
-    """
+    """Detects an increase in the mean of a stream: `delta` is the tolerated
+    drift per step, `lambda_` the alarm threshold on the cumulative deviation."""
 
     def __init__(self, delta: float, lambda_: float) -> None:
         if delta < 0 or lambda_ <= 0:

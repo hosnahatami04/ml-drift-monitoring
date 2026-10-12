@@ -115,21 +115,46 @@ def test_replay_releases_labels_after_their_delay() -> None:
     assert len(labelled) == (PARAMS.n_windows - PARAMS.label_delay) * PARAMS.window_size
 
 
-def test_wait_for_monitor_returns_once_windows_are_processed() -> None:
-    fake = FakeClient(
-        [
-            {"predictions": 400, "processed_windows": 1},
-            {"predictions": 400, "processed_windows": 2},
-        ]
-    )
+def health(processed: int, checked: int, labelled: int = 2) -> dict[str, int]:
+    return {
+        "window_size": 200,
+        "predictions": 400,
+        "processed_windows": processed,
+        "labelled_windows": labelled,
+        "performance_checked_windows": checked,
+    }
 
-    assert wait_for_monitor(fake, window_size=200, timeout=5, poll=0.01)
+
+def test_wait_for_monitor_waits_for_windows_and_performance_checks() -> None:
+    fake = FakeClient([health(1, 0), health(2, 1), health(2, 2)])
+
+    assert wait_for_monitor(fake, timeout=5, poll=0.01)
+    assert fake._health == [health(2, 2)]
 
 
 def test_wait_for_monitor_gives_up_after_timeout() -> None:
-    fake = FakeClient([{"predictions": 400, "processed_windows": 0}])
+    fake = FakeClient([health(0, 0)])
 
-    assert not wait_for_monitor(fake, window_size=200, timeout=0.05, poll=0.01)
+    assert not wait_for_monitor(fake, timeout=0.05, poll=0.01)
+
+
+def test_post_is_not_resent_after_it_went_out(server: str) -> None:
+    client = HttpClient(server)
+    client.predict(payloads(1)[0])
+    sent: list[str] = []
+    real_send = client._send
+
+    def flaky_send(method, path, payload, headers):  # type: ignore[no-untyped-def]
+        sent.append(method)
+        raise ConnectionResetError("connection reset after the request was sent")
+
+    client._send = flaky_send  # type: ignore[method-assign]
+
+    with pytest.raises(ConnectionResetError):
+        client.predict(payloads(1)[0])
+    assert sent == ["POST"]
+    client._send = real_send  # type: ignore[method-assign]
+    assert client.health()["predictions"] == 1
 
 
 def test_replay_command_against_a_running_server(

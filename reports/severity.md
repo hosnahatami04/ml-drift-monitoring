@@ -5,7 +5,8 @@ Reference AUC: 0.9272.
 
 Shift is the mean absolute displacement of the affected feature's
 window mean, in reference standard deviations. Flip rate is the
-realized label-flip share among drifted-window rows (concept only).
+realized label-flip share among drifted-window rows inside the concept
+subgroup, where the flip probability p applies (concept only).
 
 | Scenario | Severity | Shift (sd) | Flip rate | AUC (drifted) | AUC delta |
 | --- | --- | --- | --- | --- | --- |

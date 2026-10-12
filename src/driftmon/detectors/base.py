@@ -10,12 +10,12 @@ FloatArray = np.ndarray[Any, np.dtype[np.float64]]
 
 @dataclass(frozen=True)
 class TestResult:
-    """Outcome of one statistical test on one feature.
+    """`p_value` is None for PSI, which has no sampling distribution.
+    `flagged` is set by the window decision, not by the test: whether a result
+    counts depends on the multiple-testing context of the whole window."""
 
-    `p_value` is None for tests without a sampling distribution (PSI).
-    `flagged` is decided by the window decision, not by the test itself,
-    because flagging needs the multiple-testing context of the whole window.
-    """
+    # Not a test case, despite the name; stops pytest from collecting it.
+    __test__ = False
 
     feature: str
     method: str

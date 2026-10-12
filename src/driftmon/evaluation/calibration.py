@@ -1,14 +1,8 @@
-"""Threshold calibration on calibration seeds only.
-
-Objective: the highest mean detection rate over the drift scenarios at the
-calibration severity, subject to a stream-level false alarm rate on control
-streams at or below the configured ceiling. Ties go to the faster detector,
-then to fewer false alarms.
+"""Threshold calibration on calibration seeds only (objective in ADR 0008).
 
 Input-side thresholds and Page-Hinkley parameters are scored separately and
-combined afterwards: the alert manager's cooldown is per alert type, so the
-two alert families never interact and a stream's outcome under a combined
-configuration is exactly the union of its two timelines.
+combined afterwards. That is exact, not an approximation: the alert cooldown
+is per alert type, so the two families never interact.
 """
 
 import itertools

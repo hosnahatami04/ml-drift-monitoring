@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from driftmon.config import ThresholdsConfig
+from driftmon.config import EvaluationConfig, ThresholdsConfig
 from driftmon.evaluation import report
 from driftmon.evaluation.harness import AblationArm, EvaluationRun
 from driftmon.evaluation.kpis import AlertEvent, StreamOutcome
@@ -44,6 +44,7 @@ def provenance() -> dict[str, object]:
         "seeds": [100, 101],
         "calibration_seeds": [0, 1],
         "severities": ["medium"],
+        "target_severity": "medium",
         "stream": {"n_windows": 60, "window_size": 1000, "drift_start": 20, "label_delay": 3},
         "horizon": 20,
         "degradation_margin": 0.03,
@@ -81,6 +82,7 @@ def build(run: EvaluationRun) -> report.ResultsDocument:
         run,
         smoke=False,
         target_severity="medium",
+        targets=EvaluationConfig().kpi_targets,
         provenance=provenance(),
         correctness={"ks_statistic": 0.0, "chi2_p_value": 2e-7},
         samples=50,

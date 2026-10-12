@@ -6,6 +6,7 @@ import pytest
 from typer.testing import CliRunner
 
 from driftmon.cli import app
+from driftmon.config import GateTolerances
 from driftmon.evaluation import gate
 from driftmon.evaluation.report import ResultsDocument, validate_results
 
@@ -58,7 +59,7 @@ def baseline() -> dict[str, Any]:
 
 
 def test_committed_baseline_covers_the_gated_kpis(baseline: dict[str, Any]) -> None:
-    assert baseline["tolerance"] == 0.05
+    assert baseline["tolerance"] == {"share": 0.05, "per_window_false_alarm": 0.002}
     assert set(baseline["kpis"]) == {
         "detection_rate.sudden_covariate",
         "detection_rate.gradual_covariate",
@@ -97,6 +98,17 @@ def test_false_alarm_rise_beyond_tolerance_fails(baseline: dict[str, Any]) -> No
     assert any("false_alarm.stream" in v for v in gate.check(document, baseline))
 
 
+def test_per_window_false_alarm_has_its_own_tolerance(baseline: dict[str, Any]) -> None:
+    reference = baseline["kpis"]["false_alarm.per_window"]
+    small = smoke_document(**{"false_alarm.per_window": reference + 0.001})
+    # Fifteen times the 0.2% target: well inside a five-point share tolerance,
+    # and exactly the regression the gate exists to catch.
+    large = smoke_document(**{"false_alarm.per_window": reference + 0.03})
+
+    assert gate.check(small, baseline) == []
+    assert any("false_alarm.per_window" in v for v in gate.check(large, baseline))
+
+
 def test_better_results_never_fail(baseline: dict[str, Any]) -> None:
     lower_alarms = {k: 0.0 for k in baseline["kpis"] if k.startswith("false_alarm")}
 
@@ -115,7 +127,7 @@ def test_baseline_only_from_smoke_runs() -> None:
     full = smoke_document().model_copy(update={"smoke": False})
 
     with pytest.raises(ValueError, match="smoke"):
-        gate.baseline_from(full)
+        gate.baseline_from(full, GateTolerances())
 
 
 def test_cli_update_then_check_round_trip(tmp_path: Path) -> None:

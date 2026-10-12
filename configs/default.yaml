@@ -45,6 +45,21 @@ evaluation:
   ablation_severity: medium
   smoke_seed_count: 5
   smoke_severities: [medium]
+  kpi_targets:
+    detection_rate.sudden_covariate: {target: 0.95, comparator: ">="}
+    detection_rate.gradual_covariate: {target: 0.90, comparator: ">="}
+    detection_rate.concept: {target: 0.80, comparator: ">="}
+    median_ttd.sudden_covariate: {target: 1, comparator: "<="}
+    median_ttd.gradual_covariate: {target: 6, comparator: "<="}
+    median_ttd.concept: {target: 7, comparator: "<="}
+    false_alarm.stream: {target: 0.10, comparator: "<="}
+    false_alarm.per_window: {target: 0.002, comparator: "<="}
+    alert_precision: {target: 0.90, comparator: ">="}
+    lead_time.harmful_covariate: {target: 1, comparator: ">="}
+    detector_correctness: {target: 1.0e-6, comparator: "<="}
+  gate_tolerance:
+    share: 0.05
+    per_window_false_alarm: 0.002
   calibration:
     severity: medium
     max_stream_false_alarm_rate: 0.10

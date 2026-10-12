@@ -66,8 +66,11 @@ class LabelResponse(BaseModel):
 class HealthResponse(BaseModel):
     status: str
     model_fingerprint: str
+    window_size: int
     predictions: int
     processed_windows: int
+    labelled_windows: int
+    performance_checked_windows: int
 
 
 class AlertRecord(BaseModel):

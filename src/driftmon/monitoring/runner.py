@@ -59,20 +59,27 @@ class MonitorRunner:
         reports: list[WindowReport] = []
         with self._lock:
             for window_id in self.store.unprocessed_complete_windows():
-                with self.tracer.start_as_current_span("monitor.process_window") as span:
-                    span.set_attribute("driftmon.window_id", window_id)
-                    report = self._process_window(window_id)
-                    span.set_attribute("driftmon.feature_drift", report.feature_drift)
-                    span.set_attribute("driftmon.prediction_drift", report.prediction_drift)
-                reports.append(report)
+                try:
+                    with self.tracer.start_as_current_span("monitor.process_window") as span:
+                        span.set_attribute("driftmon.window_id", window_id)
+                        report = self._process_window(window_id)
+                except Exception:
+                    # Later windows wait rather than overtake this one; it is
+                    # retried on the next call and the error is logged each time.
+                    logger.exception("processing window %d failed", window_id)
+                    break
+                if report is not None:
+                    reports.append(report)
         return reports
 
-    def _process_window(self, window_id: int) -> WindowReport:
+    def _process_window(self, window_id: int) -> WindowReport | None:
         predictions = self.store.window_predictions(window_id)
         features = pd.DataFrame([p.features for p in predictions])[list(schema.MODEL_FEATURES)]
         probabilities = np.asarray([p.probability for p in predictions], dtype=float)
         report = self.monitor.process_window(window_id, features, probabilities)
-        self.store.save_window_report(report.to_dict())
+        if not self.store.save_window_report(report.to_dict()):
+            logger.info("window %d was already processed by another process", window_id)
+            return None
         if self.metrics is not None:
             self.metrics.record_window(report)
         for alert in self.alert_manager.evaluate_window(report):
@@ -89,32 +96,47 @@ class MonitorRunner:
         alerts: list[Alert] = []
         with self._lock:
             for window_id in self.store.windows_awaiting_performance():
-                with self.tracer.start_as_current_span("monitor.process_labels") as span:
-                    span.set_attribute("driftmon.window_id", window_id)
-                    predictions = self.store.window_predictions(window_id)
-                    probabilities = np.asarray([p.probability for p in predictions], dtype=float)
-                    labels = np.asarray([p.label for p in predictions], dtype=np.int64)
-                    error_rate = Monitor.error_rate(probabilities, labels)
-                    alarm = self.monitor.observe_error_rate(error_rate)
-                    span.set_attribute("driftmon.error_rate", error_rate)
-                    span.set_attribute("driftmon.performance_alarm", alarm)
-                self.store.mark_performance_checked(window_id, error_rate)
-                if self.metrics is not None:
-                    self.metrics.record_error_rate(error_rate)
-                alert = self.alert_manager.evaluate_performance(window_id, error_rate, alarm)
+                try:
+                    alert = self._check_performance(window_id)
+                except Exception:
+                    logger.exception("performance check of window %d failed", window_id)
+                    break
                 if alert is not None:
-                    logger.info(
-                        "alert performance_drift on window %d (error rate %.4f)",
-                        window_id,
-                        error_rate,
-                    )
                     alerts.append(alert)
         return alerts
+
+    def _check_performance(self, window_id: int) -> Alert | None:
+        with self.tracer.start_as_current_span("monitor.process_labels") as span:
+            span.set_attribute("driftmon.window_id", window_id)
+            predictions = self.store.window_predictions(window_id)
+            probabilities = np.asarray([p.probability for p in predictions], dtype=float)
+            labels = np.asarray([p.label for p in predictions], dtype=np.int64)
+            error_rate = Monitor.error_rate(probabilities, labels)
+            # Claim first: if another process already checked this window, its
+            # error rate must not reach this process's Page-Hinkley a second time.
+            if not self.store.mark_performance_checked(window_id, error_rate):
+                return None
+            alarm = self.monitor.observe_error_rate(error_rate)
+            span.set_attribute("driftmon.error_rate", error_rate)
+            span.set_attribute("driftmon.performance_alarm", alarm)
+        if self.metrics is not None:
+            self.metrics.record_error_rate(error_rate)
+        alert = self.alert_manager.evaluate_performance(window_id, error_rate, alarm)
+        if alert is not None:
+            logger.info(
+                "alert performance_drift on window %d (error rate %.4f)", window_id, error_rate
+            )
+        return alert
 
 
 def poll(runner: MonitorRunner, interval_seconds: float, stop: threading.Event) -> None:
     """The worker loop: process whatever is ready, then sleep until the next
     tick or until asked to stop."""
     while not stop.is_set():
-        runner.run_once()
+        try:
+            runner.run_once()
+        except Exception:
+            # A failed tick (the store briefly locked, a disk error) must not
+            # take alerting down with it; the next tick tries again.
+            logger.exception("monitor tick failed")
         stop.wait(interval_seconds)

@@ -50,6 +50,8 @@ def test_artifact_roundtrip_preserves_predictions(tmp_path: Path) -> None:
         metrics=result.metrics,
         n_duplicates_removed=0,
         split_sizes={"train": len(train_df), "validation": len(validation_df)},
+        split_fractions={"train": 0.5},
+        model_params=result.xgb_params,
     )
     artifact = artifacts.ModelArtifact(
         model=result.model,
@@ -66,19 +68,6 @@ def test_artifact_roundtrip_preserves_predictions(tmp_path: Path) -> None:
     assert loaded.reference.to_dict() == reference_stats.to_dict()
     assert loaded.metadata["seed"] == 42
     assert artifacts.latest_artifact_dir(tmp_path) == out_dir
-
-
-def test_fingerprint_ignores_timestamp() -> None:
-    base = {
-        "data_sha256": {"adult.data": "a"},
-        "seed": 42,
-        "features": {"numeric": ["age"], "categorical": []},
-        "library_versions": {"pandas": "2.0"},
-    }
-    first = artifacts.fingerprint({**base, "created_at": "2026-01-01T00:00:00"})
-    second = artifacts.fingerprint({**base, "created_at": "2027-06-30T12:00:00"})
-
-    assert first == second
 
 
 def test_quantile_bins_merge_point_masses() -> None:
@@ -113,6 +102,8 @@ def test_baseline_report_contains_metrics(tmp_path: Path) -> None:
         metrics=result.metrics,
         n_duplicates_removed=7,
         split_sizes={"train": len(train_df), "validation": len(validation_df)},
+        split_fractions={"train": 0.5},
+        model_params=result.xgb_params,
     )
     report = tmp_path / "baseline.md"
 
@@ -133,3 +124,22 @@ def test_evaluate_returns_probability_based_metrics() -> None:
 
     assert 0.0 <= metrics.auc <= 1.0
     assert 0.0 <= metrics.brier <= 1.0
+
+
+def test_fingerprint_tracks_everything_that_shapes_the_model() -> None:
+    base = artifacts.build_metadata(
+        data_hashes={"adult.data": "x", "adult.test": "y"},
+        seed=42,
+        metrics={},
+        n_duplicates_removed=0,
+        split_sizes={},
+        split_fractions={"train": 0.5},
+        model_params={"max_depth": 6},
+    )
+    retrained = {**base, "created_at": "later", "metrics": {"xgboost": {}}}
+    deeper = {**base, "model_params": {"max_depth": 8}}
+    resplit = {**base, "split_fractions": {"train": 0.6}}
+
+    assert artifacts.fingerprint(retrained) == artifacts.fingerprint(base)
+    assert artifacts.fingerprint(deeper) != artifacts.fingerprint(base)
+    assert artifacts.fingerprint(resplit) != artifacts.fingerprint(base)

@@ -1,4 +1,8 @@
-"""Checksum-verified download of the UCI Adult dataset with an OpenML fallback."""
+"""Checksum-verified download of the UCI Adult dataset.
+
+OpenML is a fallback source, but only once its fingerprint is pinned in the
+config: unverified data is never used silently.
+"""
 
 import hashlib
 import logging

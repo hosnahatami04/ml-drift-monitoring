@@ -1,4 +1,9 @@
-"""Command line entry point."""
+"""Command line entry point.
+
+Commands import their dependencies inside the function body, so `--help` and
+light commands stay fast, and the dashboard extra is only needed by the
+command that uses it.
+"""
 
 from importlib.metadata import version
 from pathlib import Path
@@ -113,6 +118,8 @@ def train(config: ConfigOption = DEFAULT_CONFIG_PATH) -> None:
         metrics=result.metrics,
         n_duplicates_removed=summary["n_duplicates_removed"],
         split_sizes=summary["split_sizes"],
+        split_fractions=settings.splits.model_dump(),
+        model_params=result.xgb_params,
     )
     artifact = artifacts.ModelArtifact(
         model=result.model,
@@ -291,26 +298,33 @@ def evaluate(
     n_workers = workers or evaluation.n_workers
     target = out_dir or (settings.artifacts_dir / "smoke" if smoke else settings.reports_dir)
 
-    inputs, artifact = harness.prepare_inputs(settings)
     artifact_dir = artifacts.latest_artifact_dir(settings.artifacts_dir)
+    inputs, artifact = harness.prepare_inputs(settings, artifact_dir)
     scenarios = load_scenarios(settings.scenarios_dir)
     thresholds = load_thresholds(settings.thresholds_path)
 
     run = harness.run_evaluation(
         settings, inputs, scenarios, thresholds, smoke=smoke, n_workers=n_workers
     )
-    # Only settings that can change a result belong in the hash; serving and
-    # telemetry options must not make an identical evaluation look different.
+    # Only settings that can change a result belong in the hash; paths and
+    # serving or telemetry options must not make an identical evaluation look
+    # different on another machine.
     hashed_settings = settings.model_dump(
         mode="json",
         exclude={
-            "log_level": True,
-            "db_path": True,
-            "service": True,
-            "telemetry": True,
-            "evaluation": {"n_workers"},
+            "data_dir",
+            "artifacts_dir",
+            "reports_dir",
+            "scenarios_dir",
+            "thresholds_path",
+            "db_path",
+            "log_level",
+            "service",
+            "telemetry",
+            "evaluation",
         },
     )
+    hashed_settings["evaluation"] = evaluation.model_dump(mode="json", exclude={"n_workers"})
     provenance = {
         "artifact": artifact_dir.name,
         "model_sha256": report.file_sha256(artifact_dir / "model.pkl"),
@@ -327,6 +341,7 @@ def evaluate(
         "seeds": run.seeds,
         "calibration_seeds": settings.seeds.calibration,
         "severities": run.severities,
+        "target_severity": evaluation.target_severity,
         "stream": asdict(run.params),
         "horizon": run.horizon,
         "degradation_margin": evaluation.degradation_margin,
@@ -337,6 +352,7 @@ def evaluate(
         run,
         smoke=smoke,
         target_severity=evaluation.target_severity,
+        targets=evaluation.kpi_targets,
         provenance=provenance,
         correctness=harness.detector_correctness(
             evaluation.bootstrap_seed, evaluation.correctness_cases
@@ -412,7 +428,13 @@ def replay(
             TestClient(create_app(build_state(local, db_path=db_path)))
         )
 
-    before = int(client.health()["predictions"])
+    health = client.health()
+    if int(health["window_size"]) != params.window_size:
+        raise typer.BadParameter(
+            f"the service uses {health['window_size']}-row windows but this stream is "
+            f"configured for {params.window_size}; set the same window_size on both"
+        )
+    before = int(health["predictions"])
     if before % params.window_size:
         typer.echo(
             f"warning: the service already holds {before} predictions, not a whole number "
@@ -427,7 +449,7 @@ def replay(
         client, generate_stream(pool, stats, scenario_config, level, seed, params)
     )
     if url is not None:
-        api_client.wait_for_monitor(client, params.window_size, timeout=wait)
+        api_client.wait_for_monitor(client, timeout=wait)
 
     alerts = [a for a in client.alerts(limit=10_000) if a["window_id"] >= first_window]
     typer.echo(f"alerts: {len(alerts)}")
@@ -456,6 +478,8 @@ def serve(
     settings = _load(config)
     # Build first: a missing model should fail before any global state is set.
     state = build_state(settings)
+    if state.inline_monitoring:
+        state.runner.restore_state()
     setup_tracing(settings.telemetry, "driftmon-api")
     uvicorn.run(create_app(state), host=host, port=port)
 
@@ -531,6 +555,7 @@ def kpi_gate(
     update: Annotated[
         bool, typer.Option(help="Write the baseline from these results instead of checking.")
     ] = False,
+    config: ConfigOption = DEFAULT_CONFIG_PATH,
 ) -> None:
     """Fail when smoke KPIs regress against the stored baseline."""
     import json
@@ -542,7 +567,8 @@ def kpi_gate(
         raise typer.BadParameter(f"{results} not found; run `make evaluate-smoke` first")
     document = validate_results(json.loads(results.read_text(encoding="utf-8")))
     if update:
-        gate.write_baseline(baseline, gate.baseline_from(document))
+        tolerance = _load(config).evaluation.gate_tolerance
+        gate.write_baseline(baseline, gate.baseline_from(document, tolerance))
         typer.echo(f"baseline written: {baseline}")
         return
     violations = gate.check(document, gate.load_baseline(baseline))

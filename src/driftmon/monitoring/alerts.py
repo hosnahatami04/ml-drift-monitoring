@@ -63,12 +63,13 @@ class WebhookSink:
 
     def emit(self, alert: Alert) -> None:
         payload = json.dumps(alert.to_dict()).encode("utf-8")
-        request = urllib.request.Request(
-            self.url, data=payload, headers={"Content-Type": "application/json"}
-        )
         try:
-            urllib.request.urlopen(request, timeout=self.timeout)
-        except OSError as exc:
+            request = urllib.request.Request(
+                self.url, data=payload, headers={"Content-Type": "application/json"}
+            )
+            with urllib.request.urlopen(request, timeout=self.timeout):
+                pass
+        except (OSError, ValueError) as exc:
             logger.warning("webhook delivery failed: %s", exc)
 
 
@@ -92,7 +93,11 @@ class AlertManager:
     def _fire(self, alert: Alert) -> Alert:
         self._last_fired[alert.type] = alert.window_id
         for sink in self.sinks:
-            sink.emit(alert)
+            # One broken sink must not stop the others from receiving the alert.
+            try:
+                sink.emit(alert)
+            except Exception:
+                logger.exception("alert sink %s failed", type(sink).__name__)
         return alert
 
     def evaluate_window(self, report: WindowReport) -> list[Alert]:

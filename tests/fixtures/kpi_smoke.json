@@ -13,5 +13,8 @@
     103,
     104
   ],
-  "tolerance": 0.05
+  "tolerance": {
+    "per_window_false_alarm": 0.002,
+    "share": 0.05
+  }
 }

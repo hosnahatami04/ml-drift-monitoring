@@ -30,15 +30,15 @@ def benjamini_hochberg(p_values: Sequence[float], alpha: float) -> list[bool]:
 
 @dataclass(frozen=True)
 class DecisionConfig:
-    """Window-level flagging thresholds. Values here are starting points;
-    the calibrated ones live in configs/thresholds.yaml."""
+    """Window-level flagging thresholds. No defaults: the values come from
+    configs/thresholds.yaml, so there is exactly one place they live."""
 
-    alpha: float = 0.01
-    correction: Correction = "bonferroni"
-    k_features: int = 1
-    min_ks_d: float = 0.05
-    min_psi: float = 0.1
-    min_cramers_v: float = 0.05
+    alpha: float
+    correction: Correction
+    k_features: int
+    min_ks_d: float
+    min_psi: float
+    min_cramers_v: float
 
 
 @dataclass(frozen=True)
@@ -64,20 +64,15 @@ def decide_window(results: Sequence[TestResult], config: DecisionConfig) -> Wind
     if not results:
         raise ValueError("cannot decide an empty window")
 
-    tested = [r for r in results if r.p_value is not None]
-    significant: dict[int, bool] = {}
-    if tested:
-        p_values = [r.p_value for r in tested if r.p_value is not None]
-        if config.correction == "bonferroni":
-            rejected = bonferroni(p_values, config.alpha)
-        else:
-            rejected = benjamini_hochberg(p_values, config.alpha)
-        significant = dict(zip([id(r) for r in tested], rejected, strict=True))
+    tested = [i for i, r in enumerate(results) if r.p_value is not None]
+    p_values = [results[i].p_value or 0.0 for i in tested]
+    correct = bonferroni if config.correction == "bonferroni" else benjamini_hochberg
+    rejected = correct(p_values, config.alpha) if tested else []
+    significant = dict(zip(tested, rejected, strict=True))
 
     decided: list[TestResult] = []
-    for result in results:
-        passes_significance = significant[id(result)] if result.p_value is not None else True
-        flagged = passes_significance and _effect_gate(result, config)
+    for i, result in enumerate(results):
+        flagged = significant.get(i, True) and _effect_gate(result, config)
         decided.append(replace(result, flagged=flagged))
 
     flagged_features = tuple(dict.fromkeys(r.feature for r in decided if r.flagged))

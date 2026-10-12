@@ -51,7 +51,9 @@ deployment also needs metrics and traces without a paid backend.
 
 Alerts arrive asynchronously in compose, up to one poll interval (2 s) after
 a window completes; `driftmon replay --url` waits for the worker to catch up
-before listing them. Only one worker may run against a store, because two
-would race on the same windows. The worker is a single point of failure for
-alerting, which is visible through its healthcheck and its
-`driftmon_last_processed_window` gauge.
+before listing them. Every window is claimed in the store before it is
+processed, so two monitoring processes cannot alert on the same window twice,
+but each keeps its own Page-Hinkley state, so one monitor per store is still
+the supported setup. The worker is a single point of failure for alerting.
+Its healthcheck only proves the process is up; a stalled loop shows as a
+`driftmon_last_processed_window` gauge that stops moving.

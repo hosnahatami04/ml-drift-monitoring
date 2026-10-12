@@ -4,7 +4,7 @@
 
 Drift detection and observability for production ML, with an evaluation harness that measures how fast and how reliably drift is caught.
 
-A model that scores well today can degrade silently months later, when the data it sees no longer looks like the data it learned from. This repository is a monitoring system for that problem: a prediction service with delayed labels, statistical drift detectors written from scratch (KS, PSI, chi-square, Page-Hinkley), alerting with Prometheus metrics and a dashboard, and a harness that injects known drift and scores the monitor that runs in production. On 30 held-out evaluation streams per scenario at medium severity, sudden covariate drift was caught in every stream within the first drifted window, concept drift in every stream after a median of 6 windows (the labels themselves arrive 3 windows late), and 6.7% of drift-free control streams raised a false alarm. Every number, including the targets that were missed, is in [reports/results.md](reports/results.md). This is a personal project on public data, with no affiliation to any employer.
+A model that scores well today can degrade silently months later, when the data it sees no longer looks like the data it learned from. This repository is a monitoring system for that problem: a prediction service with delayed labels, statistical drift detectors written from scratch (KS, PSI, chi-square, Page-Hinkley), alerting with Prometheus metrics and a dashboard, and a harness that injects known drift and scores the monitor that runs in production. On 30 held-out evaluation streams per scenario at medium severity, sudden covariate drift was caught in every stream within the first drifted window, concept drift in every stream after a median of 6 windows (the labels themselves arrive 3 windows late), and 6.7% of drift-free control streams raised a false alarm. Every number, with its 95% interval and the target it was held to, is in [reports/results.md](reports/results.md). This is a personal project on public data, with no affiliation to any employer.
 
 ## Architecture
 
@@ -23,7 +23,7 @@ flowchart LR
     harness -.-> core
 ```
 
-The monitor worker and the evaluation harness import the same monitoring core, so the evaluation measures the exact code path that runs in production. Data flow and module layout are described in [docs/architecture.md](docs/architecture.md).
+The evaluation harness runs the service's own detectors, decision rule and alert manager, and replays the order in which the service sees windows and delayed labels; a test checks that replay against the live path. Data flow and module layout are described in [docs/architecture.md](docs/architecture.md).
 
 ## Installation instructions for users
 
@@ -43,15 +43,17 @@ Replay a simulated stream with sudden drift into the running API and list the al
 uv run driftmon replay --scenario sudden_covariate --severity high --url http://localhost:8000
 ```
 
-A full stream is 60,000 requests and takes several minutes. Set `DRIFTMON_STREAM__N_WINDOWS=25` for a shorter run that still drifts from window 20. Alerts appear in the dashboard and as `driftmon_alerts_total` in Prometheus. Other scenarios: `control`, `gradual_covariate`, `concept`, `seasonal`; severities: `low`, `medium`, `high`.
+A full stream is 60,000 requests and takes several minutes. Set `DRIFTMON_STREAM__N_WINDOWS=25` for a shorter run that still drifts from window 20. Alerts appear in the dashboard and as `driftmon_alerts_total` in Prometheus. A performance alert is listed under the window whose labels revealed the problem, and it is raised when those labels arrive, three windows later. Other scenarios: `control`, `gradual_covariate`, `concept`, `seasonal`; severities: `low`, `medium`, `high`.
 
-Without Docker, the same flow runs in one process, with monitoring inline in the API:
+Without Docker, the API runs the monitor inline in one process:
 
 ```bash
-uv run driftmon serve                    # API on http://127.0.0.1:8000
-uv run driftmon replay --scenario sudden_covariate --severity high   # in-process
-make dashboard                           # http://127.0.0.1:8501
+uv run driftmon serve      # API on http://127.0.0.1:8000, store in data/driftmon.db
+uv run driftmon replay --scenario sudden_covariate --severity high --url http://127.0.0.1:8000
+make dashboard             # http://127.0.0.1:8501, reads the same store
 ```
+
+Without `--url`, `driftmon replay` runs a throwaway copy of the API in-process and writes to its own `data/replay-*.db`.
 
 ## Installation instructions for developers
 
@@ -105,12 +107,9 @@ Non-obvious decisions are recorded as ADRs in [docs/decisions/](docs/decisions/)
 
 ## Known issues
 
-- **The per-window false alarm rate misses its target**: 0.28% of control windows raised an alert, against a target of at most 0.2%. Both alarming control streams were Page-Hinkley alarms. Page-Hinkley is not reset after it fires, so one false alarm repeats after every cooldown. Changing that needs recalibration and was deliberately not done after seeing the evaluation results (ADR 0008).
-- **The drift is simulated, not natural.** It is injected by resampling real rows of one dataset (UCI Adult), so the joint distribution is realistic, but real production drift is messier and rarely arrives as a clean step.
-- **Input detectors cannot see pure concept drift.** When only P(y|x) changes, the inputs look the same; on concept streams the input alert rate was identical to control. Concept drift is caught only by Page-Hinkley on the error rate.
-- **Concept detection is bounded by label delay.** Labels arrive 3 windows late, so no performance alert can come sooner. At low severity only 46.7% of concept streams were detected within the 20-window horizon.
-- **KS is conservative on discrete and zero-heavy features** such as `capital-gain` and `capital-loss`. PSI is run on the same features to cover that gap (ADR 0005).
-- **Thresholds are specific to 1000-row windows.** With the same frozen thresholds, 100% of control streams raised a false alarm at 250-row windows and 80% at 500-row windows. Another window size needs recalibration.
-- **SQLite on a single node.** WAL mode handles the API and the worker writing concurrently, but only one monitor worker may run against a store, and it is the single point of failure for alerting.
-- **Reproducibility holds per machine.** Two runs on the same machine give a byte-identical `results.json`, but XGBoost trained on a different CPU architecture produced a slightly different model with the same library versions, so `results.json` records the model file's hash.
-- **The container image is 2.45 GB.** About 470 MB of that is NVIDIA NCCL, which XGBoost pulls in on Linux and which a CPU-only service never uses.
+- **The drift is simulated, on one dataset.** It is injected by resampling real rows of UCI Adult, so the joint distribution stays realistic, but drift in production is rarely a clean step.
+- **Concept drift is caught only through labels.** When only P(y|x) changes the inputs look the same, so it waits for Page-Hinkley on the error rate, which waits for labels; at low severity 43.3% of concept streams were detected within the horizon.
+- **KS is conservative on discrete and zero-heavy features** such as `capital-gain`; PSI runs on the same features to cover the gap (ADR 0005).
+- **Thresholds belong to 1000-row windows.** With the same thresholds, 100% of control streams raised a false alarm at 250-row windows and 80% at 500.
+- **One node, one monitor.** SQLite in WAL mode handles the API and the worker together, and windows are claimed so none is processed twice, but each monitor keeps its own Page-Hinkley state, so only one should run per store.
+- **Reproducible per machine.** XGBoost trained on another CPU architecture gives a slightly different model, so `results.json` records the model's hash. The Linux image also carries NVIDIA NCCL (about 470 MB) that XGBoost depends on and a CPU service never uses.

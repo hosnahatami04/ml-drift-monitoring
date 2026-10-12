@@ -15,6 +15,7 @@ from typing import Any, Literal
 import numpy as np
 from pydantic import BaseModel, ConfigDict
 
+from driftmon.config import KpiTarget
 from driftmon.evaluation import kpis
 from driftmon.evaluation.harness import AblationArm, EvaluationRun
 from driftmon.evaluation.kpis import Estimate, StreamOutcome
@@ -83,10 +84,12 @@ class AblationRow(_Strict):
     window_size: int
     metrics: list[AblationMetric]
     control_streams_with_alarm_by_type: dict[str, int]
+    timing: dict[str, int]
 
 
 class StreamRow(_Strict):
     scenario: str
+    kind: str
     severity: str | None
     seed: int
     alerts: list[tuple[int, str]]
@@ -153,6 +156,7 @@ def build_results(
     *,
     smoke: bool,
     target_severity: str,
+    targets: dict[str, KpiTarget],
     provenance: dict[str, Any],
     correctness: dict[str, float],
     samples: int,
@@ -166,15 +170,9 @@ def build_results(
     def by_scenario(name: str) -> list[StreamOutcome]:
         return _select(at_target, scenario=name)
 
-    def row(
-        key: str,
-        name: str,
-        scope: str,
-        unit: str,
-        estimate: Estimate,
-        target: float | None,
-        comparator: Comparator,
-    ) -> KpiRow:
+    def row(key: str, name: str, scope: str, unit: str, estimate: Estimate) -> KpiRow:
+        goal = targets.get(key, KpiTarget())
+        target, comparator = goal.target, goal.comparator
         return KpiRow(
             key=key,
             name=name,
@@ -197,8 +195,6 @@ def build_results(
             scope,
             "share",
             kpis.detection_rate(by_scenario("sudden_covariate"), samples, seed),
-            0.95,
-            ">=",
         ),
         row(
             "detection_rate.gradual_covariate",
@@ -206,8 +202,6 @@ def build_results(
             scope,
             "share",
             kpis.detection_rate(by_scenario("gradual_covariate"), samples, seed),
-            0.90,
-            ">=",
         ),
         row(
             "detection_rate.concept",
@@ -215,8 +209,6 @@ def build_results(
             scope,
             "share",
             kpis.detection_rate(by_scenario("concept"), samples, seed),
-            0.80,
-            ">=",
         ),
         row(
             "median_ttd.sudden_covariate",
@@ -224,8 +216,6 @@ def build_results(
             scope,
             "windows",
             kpis.median_ttd(by_scenario("sudden_covariate"), samples, seed),
-            1,
-            "<=",
         ),
         row(
             "median_ttd.gradual_covariate",
@@ -233,8 +223,6 @@ def build_results(
             scope,
             "windows",
             kpis.median_ttd(by_scenario("gradual_covariate"), samples, seed),
-            6,
-            "<=",
         ),
         row(
             "median_ttd.concept",
@@ -242,8 +230,6 @@ def build_results(
             scope,
             "windows",
             kpis.median_ttd(by_scenario("concept"), samples, seed),
-            7,
-            "<=",
         ),
         row(
             "false_alarm.stream",
@@ -251,8 +237,6 @@ def build_results(
             "control streams, evaluation seeds",
             "share",
             kpis.stream_false_alarm_rate(control, samples, seed),
-            0.10,
-            "<=",
         ),
         row(
             "false_alarm.per_window",
@@ -260,8 +244,6 @@ def build_results(
             "control streams, evaluation seeds",
             "alerts per window",
             kpis.per_window_false_alarm_rate(control, samples, seed),
-            0.002,
-            "<=",
         ),
         row(
             "alert_precision",
@@ -269,8 +251,6 @@ def build_results(
             f"{scope}, all drift scenarios pooled",
             "share",
             kpis.alert_precision(at_target, samples, seed),
-            0.90,
-            ">=",
         ),
         row(
             "lead_time.harmful_covariate",
@@ -278,8 +258,6 @@ def build_results(
             "covariate scenarios, all severities, streams with degradation",
             "windows",
             kpis.median_lead_time(covariate_all, samples, seed),
-            1,
-            ">=",
         ),
         row(
             "harmful_share",
@@ -287,17 +265,13 @@ def build_results(
             f"{scope}, all drift scenarios pooled",
             "share",
             kpis.harmful_share(at_target, samples, seed),
-            None,
-            "report",
         ),
         row(
             "input_silence.concept",
-            "Input-detector alert rate on concept minus control",
+            "Input-detector alert rate on concept minus control (zero by construction)",
             f"{scope}, paired by seed",
             "share",
             kpis.paired_rate_difference(concept, control, kpis.INPUT_ALERT_TYPES, samples, seed),
-            0.02,
-            "<=",
         ),
         row(
             "detector_correctness",
@@ -305,8 +279,6 @@ def build_results(
             "random inputs",
             "absolute",
             Estimate(value=correctness_worst, ci_low=None, ci_high=None, n=len(correctness)),
-            1e-6,
-            "<=",
         ),
     ]
 
@@ -344,6 +316,7 @@ def build_results(
     streams = [
         StreamRow(
             scenario=o.scenario,
+            kind=o.kind,
             severity=o.severity,
             seed=o.seed,
             alerts=[(a.window, a.type) for a in o.alerts],
@@ -413,6 +386,7 @@ def _ablation_row(arm: AblationArm, samples: int, seed: int) -> AblationRow:
             t: sum(kpis.has_alert(o, frozenset({t})) for o in control)
             for t in sorted(kpis.ALL_ALERT_TYPES)
         },
+        timing=arm.timing,
     )
 
 
@@ -505,7 +479,7 @@ def render_markdown(document: ResultsDocument) -> str:
         f"({p['thresholds']['correction']}), k={p['thresholds']['k_features']}, "
         f"KS D ≥ {p['thresholds']['min_effect']['ks_d']}, "
         f"PSI ≥ {p['thresholds']['min_effect']['psi']}, "
-        f"Cramér's V ≥ {p['thresholds']['min_effect']['cramers_v']}, "
+        f"Cramer's V ≥ {p['thresholds']['min_effect']['cramers_v']}, "
         f"Page-Hinkley delta {p['thresholds']['page_hinkley']['delta']} / "
         f"lambda {p['thresholds']['page_hinkley']['lambda']}",
         f"- Model artifact `{p['artifact']}` (model.pkl sha256 `{p['model_sha256'][:12]}`), "
@@ -602,12 +576,13 @@ def _ablation_markdown(ablations: Sequence[AblationRow]) -> list[str]:
         "",
         "## Ablations",
         "",
-        "All arms reuse the frozen thresholds; none is re-tuned, so an arm's false alarm",
-        "rate moves along with its sensitivity. Method, gate and correction arms change only",
-        "the input-side decision and are scored on feature_drift alerts alone. The",
-        "window-size arms keep the traffic volume fixed (60k rows per stream; drift start,",
-        "horizon, label delay and scenario timing scaled in rows) and are scored on all",
-        "alerts, so their time to detect is also given in rows.",
+        "All arms reuse the frozen detector thresholds; none is re-tuned, so an arm's false",
+        "alarm rate moves along with its sensitivity. Method, gate and correction arms change",
+        "only the input-side decision and are scored on feature_drift alerts alone. The",
+        "window-size arms keep the traffic volume fixed: drift start, horizon, label delay,",
+        "alert cooldown and scenario timing are scaled in rows (the table below lists what",
+        "each arm actually ran, including where a value had to be rounded), and they are",
+        "scored on all alerts, so their time to detect is also given in rows.",
         "",
         "Detection counts any relevant alert inside the horizon, so an arm with a high",
         'control false alarm rate also "detects" by chance; read detection next to the',
@@ -642,6 +617,32 @@ def _ablation_markdown(ablations: Sequence[AblationRow]) -> list[str]:
                 f"{t} {n}" for t, n in arm.control_streams_with_alarm_by_type.items()
             )
             lines.append(f"- {arm.arm}: {by_type}")
+        if rows_col:
+            lines += _timing_markdown(arms)
+    return lines
+
+
+def _timing_markdown(arms: Sequence[AblationRow]) -> list[str]:
+    keys = [
+        ("n_windows", "Stream"),
+        ("drift_start", "Drift start"),
+        ("label_delay", "Label delay"),
+        ("horizon", "Horizon"),
+        ("cooldown_windows", "Alert cooldown"),
+        ("ramp_windows", "Gradual ramp"),
+        ("seasonal_period", "Seasonal period"),
+    ]
+    lines = [
+        "",
+        "Timing per arm, in rows (window size x windows):",
+        "",
+        "| Arm | " + " | ".join(label for _, label in keys) + " |",
+        "| --- " * (len(keys) + 1) + "|",
+    ]
+    for arm in arms:
+        size = arm.timing.get("window_size", arm.window_size)
+        cells = [f"{arm.timing[k] * size:,}" if k in arm.timing else "-" for k, _ in keys]
+        lines.append(f"| {arm.arm} | " + " | ".join(cells) + " |")
     return lines
 
 
@@ -661,12 +662,26 @@ def _diagnostics(document: ResultsDocument) -> list[str]:
     for row in document.kpis:
         if row.key.startswith("detection_rate.") and row.met is False:
             scenario = row.key.split(".", 1)[1]
+            level = document.provenance["target_severity"]
             missed = [
                 s.seed
                 for s in document.streams
-                if s.scenario == scenario and s.severity == "medium" and s.time_to_detect is None
+                if s.scenario == scenario and s.severity == level and s.time_to_detect is None
             ]
-            lines.append(f"- Undetected {scenario} streams at medium severity: seeds {missed}.")
+            lines.append(f"- Undetected {scenario} streams at {level} severity: seeds {missed}.")
+    if stream_fa is not None and stream_fa.target is not None:
+        noisy = []
+        for arm in document.ablations:
+            if arm.group != "window_size":
+                continue
+            fa = next(m.estimate for m in arm.metrics if m.metric == "stream_false_alarm_rate")
+            if fa.value is not None and fa.value > stream_fa.target:
+                noisy.append(f"{arm.arm} ({_pct(fa.value)})")
+        if noisy:
+            lines.append(
+                "- With the frozen thresholds, smaller windows exceed the stream false alarm "
+                f"target: {', '.join(noisy)}. Another window size needs its own calibration."
+            )
     lead = by_key.get("lead_time.harmful_covariate")
     if lead is not None and lead.estimate.n:
         lines.append(
@@ -691,6 +706,14 @@ TEXT_PRIMARY = "#0b0b0b"
 TEXT_SECONDARY = "#52514e"
 GRID = "#e4e3df"
 SURFACE = "#fcfcfb"
+
+
+def _err(upper: float | None, lower: float | None) -> float:
+    """Length of one side of an error bar; a missing bound draws none. A
+    bound of exactly 0.0 is a real bound, not a missing one."""
+    if upper is None or lower is None:
+        return 0.0
+    return upper - lower
 
 
 def write_figures(out_dir: Path, document: ResultsDocument) -> list[Path]:
@@ -734,8 +757,8 @@ def write_figures(out_dir: Path, document: ResultsDocument) -> list[Path]:
         cells = [c for c in document.cells if c.scenario == scenario]
         x = [severities.index(c.severity) for c in cells]
         y = [c.detection_rate.value or 0.0 for c in cells]
-        low = [y_i - (c.detection_rate.ci_low or y_i) for y_i, c in zip(y, cells, strict=True)]
-        high = [(c.detection_rate.ci_high or y_i) - y_i for y_i, c in zip(y, cells, strict=True)]
+        low = [_err(y_i, c.detection_rate.ci_low) for y_i, c in zip(y, cells, strict=True)]
+        high = [_err(c.detection_rate.ci_high, y_i) for y_i, c in zip(y, cells, strict=True)]
         ax.errorbar(
             x,
             y,
@@ -759,7 +782,7 @@ def write_figures(out_dir: Path, document: ResultsDocument) -> list[Path]:
 
     # Time to detect at the target severity, one row of dots per scenario.
     fig, ax = plt.subplots(figsize=(7, 4.2))
-    target = "medium" if "medium" in severities else severities[0]
+    target = document.provenance["target_severity"]
     scenarios = [s for s in SERIES_COLORS if any(c.scenario == s for c in document.cells)]
     for row_index, scenario in enumerate(scenarios):
         ttds = sorted(
@@ -840,7 +863,7 @@ def write_figures(out_dir: Path, document: ResultsDocument) -> list[Path]:
     leads = [
         s.lead_time
         for s in document.streams
-        if s.scenario in COVARIATE_KINDS and s.lead_time is not None
+        if s.kind in COVARIATE_KINDS and s.lead_time is not None
     ]
     fig, ax = plt.subplots(figsize=(7, 3.6))
     if leads:

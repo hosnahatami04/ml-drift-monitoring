@@ -17,9 +17,10 @@ these choices will be gone unless it is written down next to the code.
 ## Decision
 
 Every non-trivial decision gets a short architecture decision record in
-`docs/decisions/`, numbered `NNNN-title.md`, with four sections: context,
-decision, alternatives considered, consequences. One page maximum. Records are
-immutable once merged; a reversal is a new record that supersedes the old one.
+`docs/decisions/`, numbered `NNNN-title.md`, with a status line and four
+sections: context, decision, alternatives considered, consequences. One page
+maximum. A merged record is not rewritten; a reversal is a new record, and the
+old record's status line points to it.
 
 ## Alternatives considered
 

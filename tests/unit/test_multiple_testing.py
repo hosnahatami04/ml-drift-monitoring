@@ -12,6 +12,19 @@ from driftmon.detectors.multiple_testing import (
 )
 
 
+def _config(**overrides: object) -> DecisionConfig:
+    values: dict[str, object] = {
+        "alpha": 0.01,
+        "correction": "bonferroni",
+        "k_features": 1,
+        "min_ks_d": 0.05,
+        "min_psi": 0.1,
+        "min_cramers_v": 0.05,
+    }
+    values.update(overrides)
+    return DecisionConfig(**values)  # type: ignore[arg-type]
+
+
 def _result(
     feature: str,
     method: str = "ks",
@@ -60,10 +73,10 @@ class TestCorrections:
 class TestWindowDecision:
     def test_empty_window_raises(self) -> None:
         with pytest.raises(ValueError, match="empty"):
-            decide_window([], DecisionConfig())
+            decide_window([], _config())
 
     def test_significant_and_large_effect_is_flagged(self) -> None:
-        decision = decide_window([_result("age")], DecisionConfig())
+        decision = decide_window([_result("age")], _config())
 
         assert decision.flagged_features == ("age",)
         assert decision.drift
@@ -76,13 +89,13 @@ class TestWindowDecision:
         result = ks_test(reference, current, "age")
         assert result.p_value is not None and result.p_value < 0.01
 
-        decision = decide_window([result], DecisionConfig(min_ks_d=0.05))
+        decision = decide_window([result], _config(min_ks_d=0.05))
 
         assert not decision.drift
         assert decision.flagged_features == ()
 
     def test_large_effect_but_not_significant_is_not_flagged(self) -> None:
-        decision = decide_window([_result("age", p_value=0.5, effect_size=0.5)], DecisionConfig())
+        decision = decide_window([_result("age", p_value=0.5, effect_size=0.5)], _config())
 
         assert not decision.drift
 
@@ -92,15 +105,15 @@ class TestWindowDecision:
             _result("hours", method="psi", p_value=None, effect_size=0.01),
         ]
 
-        decision = decide_window(results, DecisionConfig(min_psi=0.1))
+        decision = decide_window(results, _config(min_psi=0.1))
 
         assert decision.flagged_features == ("age",)
 
     def test_k_features_rule(self) -> None:
         results = [_result("age"), _result("hours")]
 
-        strict = decide_window(results, DecisionConfig(k_features=3))
-        loose = decide_window(results, DecisionConfig(k_features=2))
+        strict = decide_window(results, _config(k_features=3))
+        loose = decide_window(results, _config(k_features=2))
 
         assert not strict.drift
         assert loose.drift
@@ -111,7 +124,7 @@ class TestWindowDecision:
             _result("age", method="psi", p_value=None, effect_size=0.5),
         ]
 
-        decision = decide_window(results, DecisionConfig(k_features=2))
+        decision = decide_window(results, _config(k_features=2))
 
         assert decision.flagged_features == ("age",)
         assert not decision.drift
@@ -119,8 +132,8 @@ class TestWindowDecision:
     def test_bonferroni_is_stricter_within_window(self) -> None:
         results = [_result(f"f{i}", p_value=0.004) for i in range(5)]
 
-        bonf = decide_window(results, DecisionConfig(alpha=0.01, correction="bonferroni"))
-        bh = decide_window(results, DecisionConfig(alpha=0.01, correction="benjamini-hochberg"))
+        bonf = decide_window(results, _config(alpha=0.01, correction="bonferroni"))
+        bh = decide_window(results, _config(alpha=0.01, correction="benjamini-hochberg"))
 
         assert not bonf.drift
         assert bh.drift
@@ -128,7 +141,7 @@ class TestWindowDecision:
     def test_chi2_gated_by_cramers_v(self) -> None:
         results = [_result("workclass", method="chi2", p_value=0.0001, effect_size=0.01)]
 
-        decision = decide_window(results, DecisionConfig(min_cramers_v=0.05))
+        decision = decide_window(results, _config(min_cramers_v=0.05))
 
         assert not decision.drift
 

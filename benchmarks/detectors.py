@@ -44,7 +44,17 @@ def run_window(
         results.append(chi2_test(categorical_ref[i], categorical_cur[i], name))
         results.append(psi_categorical(categorical_freqs[i], categorical_cur[i], name))
     results.append(prediction_drift_test(probs_ref, probs_cur))
-    decide_window(results, DecisionConfig())
+    decide_window(
+        results,
+        DecisionConfig(
+            alpha=0.01,
+            correction="bonferroni",
+            k_features=1,
+            min_ks_d=0.05,
+            min_psi=0.1,
+            min_cramers_v=0.05,
+        ),
+    )
 
 
 def main() -> None:

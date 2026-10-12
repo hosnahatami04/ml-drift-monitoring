@@ -4,7 +4,7 @@ Date: 2026-10-11
 
 ## Status
 
-Accepted
+Accepted. The Page-Hinkley consequence below is addressed by ADR 0010.
 
 ## Context
 

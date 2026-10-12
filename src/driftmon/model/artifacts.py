@@ -38,10 +38,14 @@ def build_metadata(
     metrics: dict[str, dict[str, dict[str, float]]],
     n_duplicates_removed: int,
     split_sizes: dict[str, int],
+    split_fractions: dict[str, float],
+    model_params: dict[str, Any],
 ) -> dict[str, Any]:
     return {
         "data_sha256": data_hashes,
         "seed": seed,
+        "split_fractions": split_fractions,
+        "model_params": model_params,
         "features": {
             "numeric": list(schema.NUMERIC_FEATURES),
             "categorical": list(schema.CATEGORICAL_FEATURES),
@@ -55,17 +59,19 @@ def build_metadata(
 
 
 def fingerprint(metadata: dict[str, Any]) -> str:
-    """Short id for the artifact directory.
-
-    Derived only from inputs that determine the trained model (data, seed,
-    features, library versions) so re-running training yields the same id;
-    the creation timestamp is deliberately excluded.
-    """
+    """Short id for the artifact directory, from everything that determines
+    the trained model and nothing else (no timestamp), so retraining with the
+    same inputs reuses the id and changing any of them gets a new one."""
     core = {
-        "data_sha256": metadata["data_sha256"],
-        "seed": metadata["seed"],
-        "features": metadata["features"],
-        "library_versions": metadata["library_versions"],
+        key: metadata[key]
+        for key in (
+            "data_sha256",
+            "seed",
+            "split_fractions",
+            "model_params",
+            "features",
+            "library_versions",
+        )
     }
     payload = json.dumps(core, sort_keys=True).encode("utf-8")
     return hashlib.sha256(payload).hexdigest()[:12]
