@@ -1,7 +1,5 @@
 # 0010. Restart Page-Hinkley after an alarm
 
-Date: 2026-10-12
-
 ## Status
 
 Accepted. Changes the evaluation published with v1.0.0.
