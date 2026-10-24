@@ -1,7 +1,5 @@
 # 0008. Threshold calibration on held-out seeds
 
-Date: 2026-10-11
-
 ## Status
 
 Accepted. The Page-Hinkley consequence below is addressed by ADR 0010.

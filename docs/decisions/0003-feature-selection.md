@@ -1,7 +1,5 @@
 # 0003. Feature selection for the income model
 
-Date: 2026-10-08
-
 ## Status
 
 Accepted

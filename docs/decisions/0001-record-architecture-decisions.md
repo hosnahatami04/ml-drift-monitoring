@@ -1,7 +1,5 @@
 # 0001. Record architecture decisions
 
-Date: 2026-10-08
-
 ## Status
 
 Accepted

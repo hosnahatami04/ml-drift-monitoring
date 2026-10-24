@@ -1,7 +1,5 @@
 # 0009. Separate monitor worker and telemetry
 
-Date: 2026-10-11
-
 ## Status
 
 Accepted. Supersedes the "monitor runs synchronously in the request" part of
