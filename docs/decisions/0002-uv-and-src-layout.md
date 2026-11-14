@@ -1,7 +1,5 @@
 # 0002. Use uv with a src layout
 
-Date: 2026-10-08
-
 ## Status
 
 Accepted

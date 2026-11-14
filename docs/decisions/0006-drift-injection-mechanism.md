@@ -1,7 +1,5 @@
 # 0006. Drift injection by importance resampling of real rows
 
-Date: 2026-10-08
-
 ## Status
 
 Accepted

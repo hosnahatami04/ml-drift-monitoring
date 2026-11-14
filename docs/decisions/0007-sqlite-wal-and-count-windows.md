@@ -1,7 +1,5 @@
 # 0007. SQLite in WAL mode and count-based windowing
 
-Date: 2026-10-08
-
 ## Status
 
 Accepted. The decision to run the monitor inside the request is superseded by
