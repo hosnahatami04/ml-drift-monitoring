@@ -1,7 +1,5 @@
 # 0005. PSI binning scheme and KS behaviour on discrete columns
 
-Date: 2026-10-08
-
 ## Status
 
 Accepted

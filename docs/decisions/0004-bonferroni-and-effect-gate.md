@@ -1,7 +1,5 @@
 # 0004. Bonferroni by default, with an effect-size gate
 
-Date: 2026-10-08
-
 ## Status
 
 Accepted
