@@ -4,7 +4,24 @@
 
 Drift detection and observability for production ML, with an evaluation harness that measures how fast and how reliably drift is caught.
 
-A model that scores well today can degrade silently months later, when the data it sees no longer looks like the data it learned from. This repository is a monitoring system for that problem: a prediction service with delayed labels, statistical drift detectors written from scratch (KS, PSI, chi-square, Page-Hinkley), alerting with Prometheus metrics and a dashboard, and a harness that injects known drift and scores the monitor that runs in production. On 30 held-out evaluation streams per scenario at medium severity, sudden covariate drift was caught in every stream within the first drifted window, concept drift in every stream after a median of 6 windows (the labels themselves arrive 3 windows late), and 6.7% of drift-free control streams raised a false alarm. Every number, with its 95% interval and the target it was held to, is in [reports/results.md](reports/results.md). This is a personal project on public data, with no affiliation to any employer.
+A model that scores well today can degrade silently months later, when the data
+it sees no longer looks like the data it learned from. A monitor that only
+reacts once accuracy has already dropped is too late; by then real decisions
+have already been made on the old model.
+
+This repository is a monitoring system for that problem: a prediction service
+with delayed labels, statistical drift detectors written from scratch (KS, PSI,
+chi-square, Page-Hinkley), alerting with Prometheus metrics and a dashboard,
+and an evaluation harness that injects known drift and scores the monitor
+itself.
+
+On 30 held-out streams per scenario at medium severity, sudden covariate drift
+was caught in every stream within the first drifted window, concept drift
+after a median of 6 windows (labels arrive 3 windows late), and 6.7% of
+drift-free controls raised a false alarm. Every number, with its 95% interval
+and the target it was held to, is in [reports/results.md](reports/results.md).
+
+This is a personal project on public data, with no affiliation to any employer.
 
 ## Architecture
 
